@@ -247,6 +247,7 @@ def ffmpeg_cmd(src: str, dest: str, codec: str) -> list[str]:
             "-c:v", "mjpeg",                  # embed cover art as ID3 APIC
             "-id3v2_version", "3",
             "-write_id3v2", "1",
+            "-f", "mp3",
             dest
         ]
 
