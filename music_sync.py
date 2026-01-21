@@ -150,10 +150,13 @@ def wait_for_stable(path: str, min_stable_secs: float = 1.0, timeout: float = 60
         time.sleep(0.2)
     return False
 
-def atomic_ffmpeg_run(cmd: list[str], final_dest: str) -> int:
+def atomic_ffmpeg_run(cmd: list[str], final_dest: str, retry_without_video: bool = True) -> int:
     """
     Run ffmpeg to a temp file alongside the destination, then atomically replace.
     Ensures we never leave partial/corrupted outputs on failure.
+    
+    If retry_without_video is True and the command fails, retry without cover art
+    mapping (removes -map 0:v:0? and video codec options).
     """
     final_dest = nfc_path(final_dest)
     dest_dir = os.path.dirname(final_dest)
@@ -172,7 +175,7 @@ def atomic_ffmpeg_run(cmd: list[str], final_dest: str) -> int:
     cmd[-1] = tmp_dest
 
     logging.info("► %s", " ".join(cmd))
-    proc = subprocess.run(cmd)
+    proc = subprocess.run(cmd, capture_output=True)
     rc = proc.returncode
 
     if rc == 0:
@@ -190,12 +193,65 @@ def atomic_ffmpeg_run(cmd: list[str], final_dest: str) -> int:
             return 1
     else:
         logging.error("FFmpeg failed (rc=%s) for %s", rc, final_dest)
+        stderr_output = proc.stderr.decode('utf-8', errors='ignore') if proc.stderr else ''
+        
         # Cleanup temp file
         try:
             if os.path.exists(tmp_dest):
                 os.remove(tmp_dest)
         except Exception:
             pass
+        
+        # Retry without cover art if the error seems related to video/image processing
+        if retry_without_video and ('vf#' in stderr_output or 'vist#' in stderr_output or 
+                                     'VipsJpeg' in stderr_output or 'png' in stderr_output.lower() or
+                                     'mjpeg' in stderr_output.lower() or 'decode' in stderr_output.lower()):
+            logging.warning("Retrying without cover art for %s", final_dest)
+            # Build command without video mapping
+            cmd_no_video = [c for c in cmd if c not in ['-map', '0:v:0?', '-c:v', 'mjpeg', 'copy'] 
+                           and not c.startswith('-vf')]
+            # Remove -map 0:v:0? pair
+            try:
+                idx = cmd_no_video.index('0:v:0?')
+                cmd_no_video.pop(idx)  # Remove 0:v:0?
+                if idx > 0 and cmd_no_video[idx-1] == '-map':
+                    cmd_no_video.pop(idx-1)  # Remove -map
+            except ValueError:
+                pass
+            # Remove video codec options
+            filtered_cmd = []
+            skip_next = False
+            for i, c in enumerate(cmd_no_video):
+                if skip_next:
+                    skip_next = False
+                    continue
+                if c == '-c:v':
+                    skip_next = True
+                    continue
+                filtered_cmd.append(c)
+            
+            logging.info("► (retry) %s", " ".join(filtered_cmd))
+            proc2 = subprocess.run(filtered_cmd)
+            rc = proc2.returncode
+            
+            if rc == 0:
+                try:
+                    os.replace(tmp_dest, final_dest)
+                except Exception as e:
+                    logging.error("Atomic replace failed for %s: %s", final_dest, e)
+                    try:
+                        if os.path.exists(tmp_dest):
+                            os.remove(tmp_dest)
+                    except Exception:
+                        pass
+                    return 1
+            else:
+                logging.error("FFmpeg retry also failed (rc=%s) for %s", rc, final_dest)
+                try:
+                    if os.path.exists(tmp_dest):
+                        os.remove(tmp_dest)
+                except Exception:
+                    pass
 
     return rc
 
