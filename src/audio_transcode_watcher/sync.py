@@ -13,6 +13,7 @@ from pathlib import Path
 from .config import Config, OutputConfig
 from .encoder import atomic_ffmpeg_encode, build_ffmpeg_command
 from .utils import (
+    LOSSLESS_EXTENSIONS,
     appears_empty_dir,
     get_output_filename,
     is_audio_file,
@@ -121,6 +122,18 @@ def process_source_file(
             _in_progress.discard(source_path)
 
 
+def _has_lossless_source(source_path: str, config: Config) -> bool:
+    """Check if a lossless source with the same stem exists."""
+    stem = Path(source_path).stem
+    source_dir = os.path.dirname(source_path)
+    
+    for ext in LOSSLESS_EXTENSIONS:
+        lossless_path = os.path.join(source_dir, f"{stem}{ext}")
+        if os.path.exists(lossless_path) and lossless_path != source_path:
+            return True
+    return False
+
+
 def _process_outputs(source_path: str, config: Config, force: bool) -> None:
     """Process all outputs for a source file."""
     stem = nfc(Path(source_path).stem)
@@ -132,6 +145,11 @@ def _process_outputs(source_path: str, config: Config, force: bool) -> None:
         
         # Determine output filename
         if source_is_mp3 and output.codec == "alac":
+            # Skip MP3 if a lossless source with the same stem exists
+            if _has_lossless_source(source_path, config):
+                logger.debug("Skipping MP3 %s - lossless source exists", source_path)
+                continue
+            
             # Special case: copy MP3 to ALAC folder unchanged
             out_filename = os.path.basename(source_path)
             out_path = nfc_path(os.path.join(output.path, out_filename))
@@ -172,13 +190,23 @@ def delete_outputs(source_path: str, config: Config) -> None:
     
     stem = nfc(Path(source_path).stem)
     source_basename = os.path.basename(source_path)
+    source_is_mp3 = is_mp3(source_path)
     
     for output in config.outputs:
-        # Try both the transcoded filename and original filename (for MP3 copies)
-        filenames_to_check = [
-            f"{stem}{output.extension}",
-            source_basename,
-        ]
+        filenames_to_check = []
+        
+        if source_is_mp3:
+            # For MP3 source: only delete the copied MP3 in ALAC folder
+            # Don't delete transcoded files (they may come from a lossless source)
+            if output.codec == "alac":
+                filenames_to_check = [source_basename]
+            else:
+                # For other outputs, only delete if no lossless source exists
+                if not _has_lossless_source(source_path, config):
+                    filenames_to_check = [f"{stem}{output.extension}"]
+        else:
+            # For lossless source: delete the transcoded output
+            filenames_to_check = [f"{stem}{output.extension}"]
         
         for filename in filenames_to_check:
             filepath = nfc_path(os.path.join(output.path, filename))
@@ -280,6 +308,18 @@ def initial_sync(config: Config) -> None:
 
 def _cleanup_orphans(config: Config, source_stems: set[str]) -> None:
     """Remove output files that no longer have a source."""
+    # Build a set of stems that have lossless sources
+    lossless_stems = set()
+    try:
+        with os.scandir(config.source_path) as entries:
+            for entry in entries:
+                if entry.is_file():
+                    ext = Path(entry.name).suffix.lower()
+                    if ext in LOSSLESS_EXTENSIONS:
+                        lossless_stems.add(nfc(Path(entry.name).stem))
+    except Exception:
+        pass
+    
     for output in config.outputs:
         # Valid extensions for this output
         # ALAC folder may contain both .m4a and .mp3 (copied MP3s)
@@ -298,7 +338,14 @@ def _cleanup_orphans(config: Config, source_stems: set[str]) -> None:
                         continue
                     
                     stem = nfc(Path(entry.name).stem)
-                    if stem not in source_stems:
+                    is_orphan = stem not in source_stems
+                    
+                    # Special case: MP3 in ALAC folder is orphan if lossless source exists
+                    if output.codec == "alac" and entry.name.endswith(".mp3"):
+                        if stem in lossless_stems:
+                            is_orphan = True
+                    
+                    if is_orphan:
                         filepath = nfc_path(entry.path)
                         try:
                             logger.info("✘ remove orphan %s", filepath)
