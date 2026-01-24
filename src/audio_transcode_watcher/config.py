@@ -90,6 +90,7 @@ class Config:
     outputs: list[OutputConfig] = field(default_factory=list)
     force_reencode: bool = False
     allow_initial_bulk_encode: bool = True  # Allow encoding when outputs are empty
+    parallel_workers: int = 4  # Number of parallel encoding workers
     stability_timeout: float = 60.0
     min_stable_seconds: float = 1.0
     
@@ -134,6 +135,7 @@ class Config:
             outputs=outputs,
             force_reencode=settings.get("force_reencode", False),
             allow_initial_bulk_encode=settings.get("allow_initial_bulk_encode", True),
+            parallel_workers=settings.get("parallel_workers", 4),
             stability_timeout=settings.get("stability_timeout", 60.0),
             min_stable_seconds=settings.get("min_stable_seconds", 1.0),
         )

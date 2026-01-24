@@ -37,6 +37,10 @@ settings:
   # Set to true to delete all outputs and re-encode everything on startup
   force_reencode: false
   
+  # Number of parallel encoding workers (default: 4)
+  # Increase for faster bulk encoding on multi-core systems
+  parallel_workers: 4
+  
   # Maximum time to wait for a file to become stable (seconds)
   stability_timeout: 60
   

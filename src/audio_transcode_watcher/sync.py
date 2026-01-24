@@ -7,6 +7,7 @@ import os
 import shutil
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from .config import Config, OutputConfig
@@ -20,6 +21,9 @@ from .utils import (
     nfc_path,
     wait_for_stable,
 )
+
+# Default number of parallel encoding workers (can be overridden in config)
+DEFAULT_PARALLEL_WORKERS = 4
 
 logger = logging.getLogger(__name__)
 
@@ -248,9 +252,21 @@ def initial_sync(config: Config) -> None:
     # Get normalized stems for orphan detection
     source_stems = {nfc(Path(f).stem) for f in source_files}
     
-    # Process all source files (skip stability check - files are on disk)
-    for source_file in source_files:
-        process_source_file(source_file, config, force=False, check_stable=False)
+    # Process all source files in parallel (skip stability check - files are on disk)
+    workers = getattr(config, 'parallel_workers', DEFAULT_PARALLEL_WORKERS)
+    logger.info("Processing %d source files with %d workers…", len(source_files), workers)
+    
+    def process_one(src_file: str) -> None:
+        try:
+            process_source_file(src_file, config, force=False, check_stable=False)
+        except Exception as e:
+            logger.error("Error processing %s: %s", src_file, e)
+    
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = {executor.submit(process_one, f): f for f in source_files}
+        for future in as_completed(futures):
+            # Just wait for completion, errors are logged in process_one
+            pass
     
     # Remove orphans
     if safety_guard_active(config):
