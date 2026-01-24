@@ -207,28 +207,33 @@ def atomic_ffmpeg_run(cmd: list[str], final_dest: str, retry_without_video: bool
                                      'VipsJpeg' in stderr_output or 'png' in stderr_output.lower() or
                                      'mjpeg' in stderr_output.lower() or 'decode' in stderr_output.lower()):
             logging.warning("Retrying without cover art for %s", final_dest)
-            # Build command without video mapping
-            cmd_no_video = [c for c in cmd if c not in ['-map', '0:v:0?', '-c:v', 'mjpeg', 'copy'] 
-                           and not c.startswith('-vf')]
-            # Remove -map 0:v:0? pair
-            try:
-                idx = cmd_no_video.index('0:v:0?')
-                cmd_no_video.pop(idx)  # Remove 0:v:0?
-                if idx > 0 and cmd_no_video[idx-1] == '-map':
-                    cmd_no_video.pop(idx-1)  # Remove -map
-            except ValueError:
-                pass
-            # Remove video codec options
+            # Build command without video mapping by removing specific pairs
+            # We need to remove: -map 0:v:0? (and its value), -c:v (and its value)
             filtered_cmd = []
             skip_next = False
-            for i, c in enumerate(cmd_no_video):
+            i = 0
+            while i < len(cmd):
+                c = cmd[i]
                 if skip_next:
                     skip_next = False
+                    i += 1
                     continue
+                # Skip -map 0:v:0? pair (video stream mapping)
+                if c == '-map' and i + 1 < len(cmd) and cmd[i + 1] == '0:v:0?':
+                    i += 2  # Skip both -map and 0:v:0?
+                    continue
+                # Skip -c:v and its value
                 if c == '-c:v':
                     skip_next = True
+                    i += 1
+                    continue
+                # Skip -vf options
+                if c.startswith('-vf'):
+                    skip_next = True
+                    i += 1
                     continue
                 filtered_cmd.append(c)
+                i += 1
             
             logging.info("► (retry) %s", " ".join(filtered_cmd))
             proc2 = subprocess.run(filtered_cmd)
