@@ -1,0 +1,96 @@
+# Audio Transcode Watcher Configuration
+# ======================================
+#
+# This configuration file defines the source folder and output destinations
+# for automatic audio transcoding.
+#
+# Mount this file into the container and set CONFIG_FILE=/app/config.yaml
+
+# Source folder containing original audio files (FLAC, WAV, etc.)
+source:
+  path: /music/flac
+
+# Output destinations - define as many as you need
+outputs:
+  # Lossless ALAC for Apple devices
+  - name: alac
+    codec: alac
+    path: /music/alac
+    include_artwork: true
+  
+  # MP3 256kbps for broad compatibility
+  - name: mp3-256
+    codec: mp3
+    bitrate: 256k
+    path: /music/mp3
+    include_artwork: true
+  
+  # AAC 256kbps for modern devices
+  - name: aac-256
+    codec: aac
+    bitrate: 256k
+    path: /music/aac
+    include_artwork: true
+
+# Optional settings
+settings:
+  # Set to true to delete all outputs and re-encode everything on startup
+  force_reencode: false
+  
+  # Maximum time to wait for a file to become stable (seconds)
+  stability_timeout: 60
+  
+  # Minimum time a file must be unchanged before processing (seconds)
+  min_stable_seconds: 1.0
+
+
+# ============================================================================
+# SUPPORTED CODECS
+# ============================================================================
+#
+# | Codec | Extension | Bitrate     | Artwork | Notes                        |
+# |-------|-----------|-------------|---------|------------------------------|
+# | alac  | .m4a      | N/A         | Yes     | Lossless, Apple compatible   |
+# | aac   | .m4a      | 64k-320k    | Yes     | Lossy, great quality/size    |
+# | mp3   | .mp3      | 64k-320k    | Yes     | Lossy, universal support     |
+# | opus  | .opus     | 32k-256k    | No      | Lossy, best quality/size     |
+# | flac  | .flac     | N/A         | Yes     | Lossless, open format        |
+# | wav   | .wav      | N/A         | No      | Lossless, uncompressed       |
+#
+# Default bitrates: aac=256k, mp3=256k, opus=128k
+
+
+# ============================================================================
+# EXAMPLE: Multiple bitrate outputs
+# ============================================================================
+#
+# outputs:
+#   - name: mp3-320
+#     codec: mp3
+#     bitrate: 320k
+#     path: /music/mp3-320
+#   
+#   - name: mp3-192
+#     codec: mp3
+#     bitrate: 192k
+#     path: /music/mp3-192
+#   
+#   - name: mp3-128
+#     codec: mp3
+#     bitrate: 128k
+#     path: /music/mp3-128
+#     include_artwork: false  # Smaller files
+
+
+# ============================================================================
+# EXAMPLE: Minimal setup (single output)
+# ============================================================================
+#
+# source:
+#   path: /music/source
+#
+# outputs:
+#   - name: compressed
+#     codec: aac
+#     bitrate: 192k
+#     path: /music/compressed
