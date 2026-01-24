@@ -36,17 +36,31 @@ class TestSafetyGuard:
         
         assert safety_guard_active(config) is True
     
-    def test_active_when_output_empty(self, source_dir, temp_dir):
-        """Test safety guard is active when any output is empty."""
+    def test_active_when_output_empty_and_bulk_encode_disabled(self, source_dir, temp_dir):
+        """Test safety guard is active when output empty and bulk encode disabled."""
         empty_output = Path(temp_dir) / "empty_output"
         empty_output.mkdir()
         
         config = Config(
             source_path=source_dir,
             outputs=[OutputConfig(name="out", codec="alac", path=str(empty_output))],
+            allow_initial_bulk_encode=False,  # Disable bulk encoding
         )
         
         assert safety_guard_active(config) is True
+    
+    def test_inactive_when_output_empty_and_bulk_encode_enabled(self, source_dir, temp_dir):
+        """Test safety guard allows empty outputs when bulk encode enabled (default)."""
+        empty_output = Path(temp_dir) / "empty_output"
+        empty_output.mkdir()
+        
+        config = Config(
+            source_path=source_dir,
+            outputs=[OutputConfig(name="out", codec="alac", path=str(empty_output))],
+            allow_initial_bulk_encode=True,  # Default behavior
+        )
+        
+        assert safety_guard_active(config) is False
     
     def test_inactive_when_all_have_files(self, source_dir, output_dirs):
         """Test safety guard is inactive when all dirs have files."""
