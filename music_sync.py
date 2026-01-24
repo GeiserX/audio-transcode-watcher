@@ -315,12 +315,12 @@ def ffmpeg_cmd(src: str, dest: str, codec: str) -> list[str]:
     raise ValueError(f"Unknown codec: {codec}")
 
 # ── core actions ────────────────────────────────────────────────────
-def ensure_targets(src: str, force: bool = False) -> None:
+def ensure_targets(src: str, force: bool = False, check_stable: bool = True) -> None:
     """
     Create or update mirror files for a given source file.
     - If force is True, re-encode/copy even if outputs exist.
+    - If check_stable is True, wait for file to be stable before processing.
     - Respects safety guard.
-    - Waits for file to be stable before processing.
     - Uses atomic writes for encoded outputs.
     """
     src = nfc_path(src)
@@ -330,7 +330,8 @@ def ensure_targets(src: str, force: bool = False) -> None:
         return
 
     # Ensure source file is stable (avoid partial processing)
-    if not wait_for_stable(src):
+    # Skip stability check during initial sync (files are already on disk)
+    if check_stable and not wait_for_stable(src):
         logging.warning("Source not stable or disappeared: %s", src)
         return
 
@@ -474,9 +475,9 @@ def initial_sync(force_reencode: bool = False) -> None:
     # Normalize stems to NFC to match output filenames
     stems = {nfc(Path(f).stem) for f in src_files}
 
-    # Build / update mirrors
+    # Build / update mirrors (skip stability check - files are already on disk)
     for f in src_files:
-        ensure_targets(f, force=False)
+        ensure_targets(f, force=False, check_stable=False)
 
     # Remove orphans in every mirror (only if safety allows)
     if safety_guard_active():
