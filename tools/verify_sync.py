@@ -28,9 +28,13 @@ import os
 import subprocess
 import sys
 import unicodedata
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Optional
+
+# Number of parallel workers for ffprobe calls
+VERIFY_WORKERS = 8
 
 try:
     import yaml
@@ -72,8 +76,8 @@ def get_duration(filepath: str) -> Optional[float]:
         )
         if result.returncode == 0 and result.stdout.strip():
             return float(result.stdout.strip())
-    except Exception as e:
-        print(f"  Warning: Could not get duration for {filepath}: {e}", file=sys.stderr)
+    except Exception:
+        pass
     return None
 
 
@@ -108,6 +112,44 @@ def get_metadata(filepath: str) -> dict[str, str]:
     except Exception:
         pass
     return metadata
+
+
+def get_file_info(filepath: str) -> tuple[Optional[float], dict[str, str]]:
+    """Get both duration and metadata in a single ffprobe call."""
+    duration = None
+    metadata = {}
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe", "-v", "quiet",
+                "-show_entries", "format=duration:format_tags",
+                "-of", "json",
+                filepath
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            data = json.loads(result.stdout)
+            fmt = data.get("format", {})
+            
+            # Get duration
+            if "duration" in fmt:
+                try:
+                    duration = float(fmt["duration"])
+                except (ValueError, TypeError):
+                    pass
+            
+            # Get metadata
+            tags = fmt.get("tags", {})
+            for key, value in tags.items():
+                normalized_key = key.lower().replace(" ", "_")
+                if normalized_key in METADATA_TAGS or key.lower() in METADATA_TAGS:
+                    metadata[normalized_key] = str(value).strip()
+    except Exception:
+        pass
+    return duration, metadata
 
 
 def normalize_track_number(value: str) -> str:
@@ -266,44 +308,59 @@ def verify_folder(
         common = random.sample(common, sample_size)
         common = sorted(common)
     
-    # Check duration mismatches
-    if check_duration:
-        for stem in common:
-            src_path = src_files[stem]
-            dest_path = dest_files[stem]
+    # Check duration and metadata in parallel
+    if check_duration or check_metadata:
+        total = len(common)
+        print(f"   Analyzing {total} files with {VERIFY_WORKERS} workers...", flush=True)
+        
+        # Prepare file pairs
+        file_pairs = [(stem, src_files[stem], dest_files[stem]) for stem in common]
+        
+        def analyze_pair(args):
+            stem, src_path, dest_path = args
+            src_dur, src_meta = get_file_info(src_path)
+            dest_dur, dest_meta = get_file_info(dest_path)
+            return stem, src_path, dest_path, src_dur, dest_dur, src_meta, dest_meta
+        
+        completed = 0
+        with ThreadPoolExecutor(max_workers=VERIFY_WORKERS) as executor:
+            futures = {executor.submit(analyze_pair, pair): pair for pair in file_pairs}
             
-            src_dur = get_duration(src_path)
-            dest_dur = get_duration(dest_path)
-            
-            if src_dur is not None and dest_dur is not None:
-                diff = abs(src_dur - dest_dur)
-                if diff > duration_threshold:
-                    report.duration_mismatches.append({
-                        "stem": stem,
-                        "source": src_path,
-                        "source_duration": round(src_dur, 2),
-                        "dest": dest_path,
-                        "dest_duration": round(dest_dur, 2),
-                        "difference": round(diff, 2)
-                    })
-    
-    # Check metadata mismatches
-    if check_metadata:
-        for stem in common:
-            src_path = src_files[stem]
-            dest_path = dest_files[stem]
-            
-            src_meta = get_metadata(src_path)
-            dest_meta = get_metadata(dest_path)
-            
-            differences = compare_metadata(src_meta, dest_meta)
-            if differences:
-                report.metadata_mismatches.append({
-                    "stem": stem,
-                    "source": src_path,
-                    "dest": dest_path,
-                    "differences": differences
-                })
+            for future in as_completed(futures):
+                completed += 1
+                if completed % 100 == 0 or completed == total:
+                    print(f"   Progress: {completed}/{total}...", end="\r", flush=True)
+                
+                try:
+                    stem, src_path, dest_path, src_dur, dest_dur, src_meta, dest_meta = future.result()
+                    
+                    # Check duration
+                    if check_duration and src_dur is not None and dest_dur is not None:
+                        diff = abs(src_dur - dest_dur)
+                        if diff > duration_threshold:
+                            report.duration_mismatches.append({
+                                "stem": stem,
+                                "source": src_path,
+                                "source_duration": round(src_dur, 2),
+                                "dest": dest_path,
+                                "dest_duration": round(dest_dur, 2),
+                                "difference": round(diff, 2)
+                            })
+                    
+                    # Check metadata
+                    if check_metadata:
+                        differences = compare_metadata(src_meta, dest_meta)
+                        if differences:
+                            report.metadata_mismatches.append({
+                                "stem": stem,
+                                "source": src_path,
+                                "dest": dest_path,
+                                "differences": differences
+                            })
+                except Exception:
+                    pass
+        
+        print(f"   Progress: {total}/{total} done.        ")
     
     return report
 
