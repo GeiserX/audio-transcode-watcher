@@ -218,6 +218,34 @@ def delete_outputs(source_path: str, config: Config) -> None:
                     logger.error("Failed to remove %s: %s", filepath, e)
 
 
+def cleanup_stale_temp_files(config: Config) -> int:
+    """
+    Remove stale temporary files from interrupted encodes.
+    
+    These files have the .tmp__ff suffix and are left behind when
+    ffmpeg is interrupted (e.g., container restart, crash).
+    
+    Returns the number of files cleaned up.
+    """
+    cleaned = 0
+    for output in config.outputs:
+        try:
+            if not os.path.exists(output.path):
+                continue
+            with os.scandir(output.path) as entries:
+                for entry in entries:
+                    if entry.is_file() and entry.name.endswith(".tmp__ff"):
+                        try:
+                            logger.info("✘ cleanup stale temp %s", entry.path)
+                            os.remove(entry.path)
+                            cleaned += 1
+                        except Exception as e:
+                            logger.error("Failed to remove temp file %s: %s", entry.path, e)
+        except Exception as e:
+            logger.error("Failed to scan %s for temp files: %s", output.path, e)
+    return cleaned
+
+
 def purge_all_outputs(config: Config) -> None:
     """
     Delete all files in output directories.
@@ -247,6 +275,7 @@ def initial_sync(config: Config) -> None:
     """
     Perform initial synchronization of source to all outputs.
     
+    - Cleans up stale temp files from interrupted encodes
     - Creates output directories
     - Encodes missing files
     - Removes orphaned files from outputs
@@ -254,6 +283,11 @@ def initial_sync(config: Config) -> None:
     # Create output directories
     for output in config.outputs:
         os.makedirs(output.path, exist_ok=True)
+    
+    # Clean up stale temp files from previous interrupted runs
+    cleaned = cleanup_stale_temp_files(config)
+    if cleaned > 0:
+        logger.info("Cleaned up %d stale temp files from interrupted encodes.", cleaned)
     
     # Purge if force_reencode is enabled
     if config.force_reencode:
