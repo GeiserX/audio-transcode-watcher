@@ -466,7 +466,8 @@ def initial_sync(force_reencode: bool = False) -> None:
         logging.error("Failed to scan SRC_DIR %s: %s", SRC_DIR, e)
         return
 
-    stems = {Path(f).stem for f in src_files}
+    # Normalize stems to NFC to match output filenames
+    stems = {nfc(Path(f).stem) for f in src_files}
 
     # Build / update mirrors
     for f in src_files:
@@ -488,7 +489,7 @@ def initial_sync(force_reencode: bool = False) -> None:
                 for entry in it:
                     if entry.is_file():
                         fname = entry.name
-                        if fname.endswith(keep_ext) and Path(fname).stem not in stems:
+                        if fname.endswith(keep_ext) and nfc(Path(fname).stem) not in stems:
                             p = nfc_path(os.path.join(folder, fname))
                             try:
                                 logging.info("✘ remove %s", p)
