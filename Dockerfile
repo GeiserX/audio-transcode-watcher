@@ -10,6 +10,7 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
 # App
 COPY music_sync.py /app/music_sync.py
+COPY verify_sync.py /app/verify_sync.py
 WORKDIR /app
 ENV PYTHONUNBUFFERED=1
 ENTRYPOINT ["python", "music_sync.py"]
