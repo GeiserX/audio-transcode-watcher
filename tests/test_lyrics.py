@@ -7,7 +7,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from audio_transcode_watcher.lyrics import extract_metadata, fetch_lyrics_for_file
+from audio_transcode_watcher.lyrics import (
+    _segments_to_lrc,
+    extract_metadata,
+    fetch_lyrics_for_file,
+)
 
 
 class TestExtractMetadata:
@@ -57,6 +61,28 @@ class TestExtractMetadata:
         assert result == ("AC DC", "Thunderstruck")
 
 
+class TestSegmentsToLrc:
+    """Tests for _segments_to_lrc()."""
+
+    def test_converts_segments(self):
+        segments = [
+            {"start": 0.0, "text": "Hello world"},
+            {"start": 65.5, "text": "Second line"},
+        ]
+        result = _segments_to_lrc(segments)
+        assert "[00:00.00] Hello world" in result
+        assert "[01:05.50] Second line" in result
+
+    def test_skips_empty_text(self):
+        segments = [
+            {"start": 0.0, "text": "  "},
+            {"start": 5.0, "text": "Real line"},
+        ]
+        result = _segments_to_lrc(segments)
+        assert "Real line" in result
+        assert result.count("[") == 1
+
+
 class TestFetchLyricsForFile:
     """Tests for fetch_lyrics_for_file()."""
 
@@ -78,28 +104,60 @@ class TestFetchLyricsForFile:
         mock_meta.return_value = ("Queen", "Radio Gaga")
         mock_syncedlyrics.search.return_value = "[00:01.00] All we hear is\n[00:03.00] Radio gaga"
 
-        result = fetch_lyrics_for_file(str(audio))
+        result = fetch_lyrics_for_file(str(audio), whisper_fallback=False)
         assert result is not None
         assert result.endswith(".lrc")
         assert os.path.isfile(result)
         content = open(result).read()
         assert "Radio gaga" in content
 
+    @patch("audio_transcode_watcher.lyrics._transcribe_with_whisper")
+    @patch("audio_transcode_watcher.lyrics.syncedlyrics")
+    @patch("audio_transcode_watcher.lyrics.extract_metadata")
+    def test_falls_back_to_whisper(self, mock_meta, mock_syncedlyrics, mock_whisper, tmp_path):
+        """Fall back to Whisper when syncedlyrics returns nothing."""
+        audio = tmp_path / "Niche Band - Rare Song.flac"
+        audio.touch()
+        mock_meta.return_value = ("Niche Band", "Rare Song")
+        mock_syncedlyrics.search.return_value = None
+        mock_whisper.return_value = "[00:00.00] Transcribed by whisper"
+
+        result = fetch_lyrics_for_file(str(audio), whisper_fallback=True)
+        assert result is not None
+        assert os.path.isfile(result)
+        content = open(result).read()
+        assert "Transcribed by whisper" in content
+        mock_whisper.assert_called_once()
+
+    @patch("audio_transcode_watcher.lyrics._transcribe_with_whisper")
+    @patch("audio_transcode_watcher.lyrics.syncedlyrics")
+    @patch("audio_transcode_watcher.lyrics.extract_metadata")
+    def test_whisper_disabled(self, mock_meta, mock_syncedlyrics, mock_whisper, tmp_path):
+        """Don't use Whisper when disabled."""
+        audio = tmp_path / "Artist - Song.flac"
+        audio.touch()
+        mock_meta.return_value = ("Artist", "Song")
+        mock_syncedlyrics.search.return_value = None
+
+        result = fetch_lyrics_for_file(str(audio), whisper_fallback=False)
+        assert result is None
+        mock_whisper.assert_not_called()
+
     @patch("audio_transcode_watcher.lyrics.syncedlyrics")
     @patch("audio_transcode_watcher.lyrics.extract_metadata")
     def test_returns_none_when_no_lyrics(self, mock_meta, mock_syncedlyrics, tmp_path):
-        """Return None when syncedlyrics finds nothing."""
+        """Return None when nothing is found."""
         audio = tmp_path / "Obscure Band - Niche Song.flac"
         audio.touch()
         mock_meta.return_value = ("Obscure Band", "Niche Song")
         mock_syncedlyrics.search.return_value = None
 
-        result = fetch_lyrics_for_file(str(audio))
+        result = fetch_lyrics_for_file(str(audio), whisper_fallback=False)
         assert result is None
 
     def test_returns_none_when_no_metadata(self, tmp_path):
         """Return None when metadata can't be extracted."""
         audio = tmp_path / "noinfo.flac"
         audio.touch()
-        result = fetch_lyrics_for_file(str(audio))
+        result = fetch_lyrics_for_file(str(audio), whisper_fallback=False)
         assert result is None

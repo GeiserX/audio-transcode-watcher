@@ -122,7 +122,11 @@ def process_source_file(
         # Auto-fetch lyrics if enabled and no .lrc sidecar exists
         if config.fetch_lyrics:
             try:
-                fetch_lyrics_for_file(source_path)
+                fetch_lyrics_for_file(
+                    source_path,
+                    whisper_fallback=config.whisper_fallback,
+                    whisper_model=config.whisper_model,
+                )
             except Exception:
                 logger.debug("Lyrics fetch failed for %s", source_path, exc_info=True)
         sync_sidecars(source_path, config)
