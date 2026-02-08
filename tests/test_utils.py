@@ -8,6 +8,7 @@ from audio_transcode_watcher.utils import (
     appears_empty_dir,
     get_output_filename,
     has_audio_extension,
+    has_sidecar_extension,
     is_audio_file,
     is_lossless,
     is_mp3,
@@ -92,6 +93,30 @@ class TestHasAudioExtension:
     def test_no_extension(self):
         """Test that path without extension is not recognized."""
         assert has_audio_extension("/music/noext") is False
+
+
+class TestHasSidecarExtension:
+    """Tests for has_sidecar_extension function."""
+
+    def test_lrc_is_sidecar(self):
+        """Test that .lrc extension is recognized."""
+        assert has_sidecar_extension("/music/Artist - Song.lrc") is True
+
+    def test_flac_is_not_sidecar(self):
+        """Test that .flac extension is not a sidecar."""
+        assert has_sidecar_extension("/music/Artist - Song.flac") is False
+
+    def test_txt_is_not_sidecar(self):
+        """Test that .txt is not a sidecar."""
+        assert has_sidecar_extension("/music/notes.txt") is False
+
+    def test_case_insensitive(self):
+        """Test that extension matching is case-insensitive."""
+        assert has_sidecar_extension("/music/Song.LRC") is True
+
+    def test_nonexistent_path(self):
+        """Test works on nonexistent paths."""
+        assert has_sidecar_extension("/nonexistent/Song.lrc") is True
 
 
 class TestIsAudioFile:

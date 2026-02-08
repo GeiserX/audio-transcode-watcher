@@ -14,6 +14,7 @@ from .config import Config, OutputConfig
 from .encoder import atomic_ffmpeg_encode, build_ffmpeg_command
 from .utils import (
     LOSSLESS_EXTENSIONS,
+    SIDECAR_EXTENSIONS,
     appears_empty_dir,
     get_output_filename,
     is_audio_file,
@@ -117,6 +118,7 @@ def process_source_file(
     
     try:
         _process_outputs(source_path, config, force)
+        sync_sidecars(source_path, config)
     finally:
         with _in_progress_lock:
             _in_progress.discard(source_path)
@@ -216,6 +218,53 @@ def delete_outputs(source_path: str, config: Config) -> None:
                     os.remove(filepath)
                 except Exception as e:
                     logger.error("Failed to remove %s: %s", filepath, e)
+
+    # Also remove sidecar files from all outputs
+    delete_sidecars(source_path, config)
+
+
+def sync_sidecars(source_path: str, config: Config) -> None:
+    """
+    Copy sidecar files (e.g. .lrc lyrics) from source to all output directories.
+
+    Copies if the destination is missing or older than the source.
+    """
+    source_path = nfc_path(source_path)
+    stem = nfc(Path(source_path).stem)
+    source_dir = os.path.dirname(source_path)
+
+    for ext in SIDECAR_EXTENSIONS:
+        sidecar_src = nfc_path(os.path.join(source_dir, f"{stem}{ext}"))
+        if not os.path.isfile(sidecar_src):
+            continue
+
+        for output in config.outputs:
+            sidecar_dst = nfc_path(os.path.join(output.path, f"{stem}{ext}"))
+            try:
+                needs_copy = not os.path.exists(sidecar_dst)
+                if not needs_copy:
+                    needs_copy = os.path.getmtime(sidecar_src) > os.path.getmtime(sidecar_dst)
+                if needs_copy:
+                    shutil.copy2(sidecar_src, sidecar_dst)
+                    logger.info("► copy sidecar %s → %s", sidecar_src, sidecar_dst)
+            except Exception as e:
+                logger.error("Failed to copy sidecar %s → %s: %s", sidecar_src, sidecar_dst, e)
+
+
+def delete_sidecars(source_path: str, config: Config) -> None:
+    """Delete sidecar files from all output directories for a given source."""
+    source_path = nfc_path(source_path)
+    stem = nfc(Path(source_path).stem)
+
+    for ext in SIDECAR_EXTENSIONS:
+        for output in config.outputs:
+            sidecar_path = nfc_path(os.path.join(output.path, f"{stem}{ext}"))
+            if os.path.exists(sidecar_path):
+                try:
+                    logger.info("✘ remove sidecar %s", sidecar_path)
+                    os.remove(sidecar_path)
+                except Exception as e:
+                    logger.error("Failed to remove sidecar %s: %s", sidecar_path, e)
 
 
 def cleanup_stale_temp_files(config: Config) -> int:
@@ -388,3 +437,24 @@ def _cleanup_orphans(config: Config, source_stems: set[str]) -> None:
                             logger.error("Failed to remove %s: %s", filepath, e)
         except Exception as e:
             logger.error("Failed to scan %s for orphans: %s", output.path, e)
+
+    # Clean up orphaned sidecar files in output directories
+    sidecar_exts = tuple(SIDECAR_EXTENSIONS)
+    for output in config.outputs:
+        try:
+            with os.scandir(output.path) as entries:
+                for entry in entries:
+                    if not entry.is_file():
+                        continue
+                    if not entry.name.lower().endswith(sidecar_exts):
+                        continue
+                    stem = nfc(Path(entry.name).stem)
+                    if stem not in source_stems:
+                        filepath = nfc_path(entry.path)
+                        try:
+                            logger.info("✘ remove orphan sidecar %s", filepath)
+                            os.remove(filepath)
+                        except Exception as e:
+                            logger.error("Failed to remove sidecar %s: %s", filepath, e)
+        except Exception as e:
+            logger.error("Failed to scan %s for orphan sidecars: %s", output.path, e)

@@ -9,10 +9,12 @@ from audio_transcode_watcher.config import Config, OutputConfig
 from audio_transcode_watcher.sync import (
     _cleanup_orphans,
     delete_outputs,
+    delete_sidecars,
     initial_sync,
     process_source_file,
     purge_all_outputs,
     safety_guard_active,
+    sync_sidecars,
 )
 from audio_transcode_watcher.utils import nfc
 
@@ -307,3 +309,170 @@ class TestCleanupOrphans:
         
         # MP3 copy should be kept
         assert mp3_copy.exists()
+
+
+class TestSyncSidecars:
+    """Tests for sync_sidecars function."""
+
+    def test_copies_lrc_to_outputs(self, temp_dir):
+        """Test that .lrc files are copied to all output directories."""
+        source = Path(temp_dir) / "source"
+        source.mkdir()
+        (source / "Artist - Song.flac").touch()
+        lrc = source / "Artist - Song.lrc"
+        lrc.write_text("[00:01.00] Hello")
+
+        out1 = Path(temp_dir) / "aac"
+        out1.mkdir()
+        out2 = Path(temp_dir) / "mp3"
+        out2.mkdir()
+
+        config = Config(
+            source_path=str(source),
+            outputs=[
+                OutputConfig(name="aac", codec="aac", path=str(out1)),
+                OutputConfig(name="mp3", codec="mp3", path=str(out2)),
+            ],
+        )
+
+        sync_sidecars(str(source / "Artist - Song.flac"), config)
+
+        assert (out1 / "Artist - Song.lrc").exists()
+        assert (out2 / "Artist - Song.lrc").exists()
+        assert (out1 / "Artist - Song.lrc").read_text() == "[00:01.00] Hello"
+
+    def test_skips_when_no_lrc_exists(self, temp_dir):
+        """Test that nothing happens when source has no .lrc file."""
+        source = Path(temp_dir) / "source"
+        source.mkdir()
+        (source / "Artist - Song.flac").touch()
+
+        output = Path(temp_dir) / "output"
+        output.mkdir()
+
+        config = Config(
+            source_path=str(source),
+            outputs=[OutputConfig(name="out", codec="aac", path=str(output))],
+        )
+
+        sync_sidecars(str(source / "Artist - Song.flac"), config)
+
+        assert not (output / "Artist - Song.lrc").exists()
+
+    def test_does_not_overwrite_identical(self, temp_dir):
+        """Test that an up-to-date sidecar is not re-copied."""
+        import time
+
+        source = Path(temp_dir) / "source"
+        source.mkdir()
+        lrc = source / "Song.lrc"
+        lrc.write_text("lyrics")
+
+        output = Path(temp_dir) / "output"
+        output.mkdir()
+        dst = output / "Song.lrc"
+        dst.write_text("lyrics")
+        # Make destination newer than source
+        import os
+        os.utime(str(dst), (time.time() + 10, time.time() + 10))
+
+        config = Config(
+            source_path=str(source),
+            outputs=[OutputConfig(name="out", codec="aac", path=str(output))],
+        )
+
+        sync_sidecars(str(source / "Song.flac"), config)
+
+        # Should not have been overwritten (still same content)
+        assert dst.read_text() == "lyrics"
+
+
+class TestDeleteSidecars:
+    """Tests for delete_sidecars function."""
+
+    def test_deletes_lrc_from_outputs(self, temp_dir):
+        """Test that .lrc files are removed from outputs."""
+        source = Path(temp_dir) / "source"
+        source.mkdir()
+
+        out1 = Path(temp_dir) / "aac"
+        out1.mkdir()
+        lrc1 = out1 / "Artist - Song.lrc"
+        lrc1.touch()
+
+        out2 = Path(temp_dir) / "mp3"
+        out2.mkdir()
+        lrc2 = out2 / "Artist - Song.lrc"
+        lrc2.touch()
+
+        config = Config(
+            source_path=str(source),
+            outputs=[
+                OutputConfig(name="aac", codec="aac", path=str(out1)),
+                OutputConfig(name="mp3", codec="mp3", path=str(out2)),
+            ],
+        )
+
+        delete_sidecars(str(source / "Artist - Song.flac"), config)
+
+        assert not lrc1.exists()
+        assert not lrc2.exists()
+
+    def test_no_error_when_lrc_missing(self, temp_dir):
+        """Test that no error when .lrc doesn't exist in output."""
+        source = Path(temp_dir) / "source"
+        source.mkdir()
+
+        output = Path(temp_dir) / "output"
+        output.mkdir()
+
+        config = Config(
+            source_path=str(source),
+            outputs=[OutputConfig(name="out", codec="aac", path=str(output))],
+        )
+
+        # Should not raise
+        delete_sidecars(str(source / "Song.flac"), config)
+
+
+class TestCleanupOrphanSidecars:
+    """Tests for orphan sidecar cleanup in _cleanup_orphans."""
+
+    def test_removes_orphan_lrc(self, temp_dir):
+        """Test that orphaned .lrc files are removed from outputs."""
+        source = Path(temp_dir) / "source"
+        source.mkdir()
+
+        output = Path(temp_dir) / "output"
+        output.mkdir()
+        orphan_lrc = output / "Deleted - Song.lrc"
+        orphan_lrc.touch()
+
+        config = Config(
+            source_path=str(source),
+            outputs=[OutputConfig(name="out", codec="aac", path=str(output))],
+        )
+
+        _cleanup_orphans(config, set())
+
+        assert not orphan_lrc.exists()
+
+    def test_keeps_valid_lrc(self, temp_dir):
+        """Test that .lrc files with matching sources are kept."""
+        source = Path(temp_dir) / "source"
+        source.mkdir()
+        (source / "Valid - Song.flac").touch()
+
+        output = Path(temp_dir) / "output"
+        output.mkdir()
+        valid_lrc = output / "Valid - Song.lrc"
+        valid_lrc.touch()
+
+        config = Config(
+            source_path=str(source),
+            outputs=[OutputConfig(name="out", codec="aac", path=str(output))],
+        )
+
+        _cleanup_orphans(config, {nfc("Valid - Song")})
+
+        assert valid_lrc.exists()
