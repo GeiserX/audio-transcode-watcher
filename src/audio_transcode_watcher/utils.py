@@ -38,8 +38,17 @@ def nfc_path(p: str) -> str:
     return normalized
 
 
+def has_audio_extension(path: str) -> bool:
+    """Check if a path has a recognized audio file extension (no existence check).
+
+    Use this instead of is_audio_file() when the file may no longer exist
+    on disk (e.g. in watchdog on_deleted / on_moved handlers).
+    """
+    return Path(nfc_path(path)).suffix.lower() in AUDIO_EXTENSIONS
+
+
 def is_audio_file(path: str) -> bool:
-    """Check if a file is a recognized audio file."""
+    """Check if a file is a recognized audio file (must exist on disk)."""
     normalized = nfc_path(path)
     if not os.path.isfile(normalized):
         return False

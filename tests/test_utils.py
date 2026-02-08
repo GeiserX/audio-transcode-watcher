@@ -7,6 +7,7 @@ import pytest
 from audio_transcode_watcher.utils import (
     appears_empty_dir,
     get_output_filename,
+    has_audio_extension,
     is_audio_file,
     is_lossless,
     is_mp3,
@@ -59,6 +60,38 @@ class TestNfcPath:
     def test_handles_empty_path(self):
         """Test handling of empty path."""
         assert nfc_path("") == ""
+
+
+class TestHasAudioExtension:
+    """Tests for has_audio_extension function (no file existence check)."""
+    
+    def test_flac_extension(self):
+        """Test that .flac extension is recognized."""
+        assert has_audio_extension("/music/Artist - Song.flac") is True
+    
+    def test_mp3_extension(self):
+        """Test that .mp3 extension is recognized."""
+        assert has_audio_extension("/music/Artist - Song.mp3") is True
+    
+    def test_m4a_extension(self):
+        """Test that .m4a extension is recognized."""
+        assert has_audio_extension("/music/Artist - Song.m4a") is True
+    
+    def test_nonexistent_file_still_recognized(self):
+        """Test that a nonexistent path with audio extension returns True."""
+        assert has_audio_extension("/nonexistent/path/Song.flac") is True
+    
+    def test_txt_extension_not_audio(self):
+        """Test that .txt extension is not recognized."""
+        assert has_audio_extension("/music/readme.txt") is False
+    
+    def test_case_insensitive(self):
+        """Test that extension matching is case-insensitive."""
+        assert has_audio_extension("/music/Song.FLAC") is True
+    
+    def test_no_extension(self):
+        """Test that path without extension is not recognized."""
+        assert has_audio_extension("/music/noext") is False
 
 
 class TestIsAudioFile:
