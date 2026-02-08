@@ -9,7 +9,7 @@ from watchdog.observers import Observer
 
 from .config import Config
 from .sync import delete_outputs, process_source_file, safety_guard_active
-from .utils import is_audio_file
+from .utils import has_audio_extension, is_audio_file
 
 
 class AudioSyncHandler(FileSystemEventHandler):
@@ -59,8 +59,8 @@ class AudioSyncHandler(FileSystemEventHandler):
         if event.is_directory:
             return
         
-        # Delete outputs for old path
-        if is_audio_file(event.src_path):
+        # Delete outputs for old path (file no longer exists at src_path)
+        if has_audio_extension(event.src_path):
             delete_outputs(event.src_path, self.config)
         
         # Create outputs for new path
@@ -72,7 +72,8 @@ class AudioSyncHandler(FileSystemEventHandler):
         if event.is_directory:
             return
         
-        if is_audio_file(event.src_path):
+        # File no longer exists, so check extension only
+        if has_audio_extension(event.src_path):
             delete_outputs(event.src_path, self.config)
 
 
