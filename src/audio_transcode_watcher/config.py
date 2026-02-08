@@ -94,6 +94,8 @@ class Config:
     stability_timeout: float = 60.0
     min_stable_seconds: float = 1.0
     fetch_lyrics: bool = True  # Auto-fetch .lrc lyrics via syncedlyrics
+    whisper_fallback: bool = True  # Use Whisper local transcription as fallback
+    whisper_model: str = "base"  # Whisper model size: tiny, base, small, medium, large
     
     def __post_init__(self) -> None:
         """Validate configuration after initialization."""
@@ -140,6 +142,8 @@ class Config:
             stability_timeout=settings.get("stability_timeout", 60.0),
             min_stable_seconds=settings.get("min_stable_seconds", 1.0),
             fetch_lyrics=settings.get("fetch_lyrics", True),
+            whisper_fallback=settings.get("whisper_fallback", True),
+            whisper_model=settings.get("whisper_model", "base"),
         )
     
     @classmethod
