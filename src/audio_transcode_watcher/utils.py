@@ -17,6 +17,9 @@ LOSSY_EXTENSIONS = {".mp3", ".aac", ".m4a"}
 
 AUDIO_EXTENSIONS = LOSSLESS_EXTENSIONS | LOSSY_EXTENSIONS | {".mp3"}
 
+# Sidecar file extensions to copy alongside transcoded audio
+SIDECAR_EXTENSIONS = {".lrc"}
+
 
 def nfc(s: str) -> str:
     """Normalize string to NFC Unicode form."""
@@ -53,6 +56,11 @@ def is_audio_file(path: str) -> bool:
     if not os.path.isfile(normalized):
         return False
     return Path(normalized).suffix.lower() in AUDIO_EXTENSIONS
+
+
+def has_sidecar_extension(path: str) -> bool:
+    """Check if a path has a recognized sidecar file extension (e.g. .lrc)."""
+    return Path(nfc_path(path)).suffix.lower() in SIDECAR_EXTENSIONS
 
 
 def is_lossless(path: str) -> bool:
