@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "audio-transcode-watcher"
-version = "0.2.0"
+version = "0.3.0"
 description = "Watch a source folder and automatically transcode audio files to multiple formats"
 readme = "README.md"
 license = "GPL-3.0-or-later"
@@ -28,6 +28,8 @@ classifiers = [
 dependencies = [
     "watchdog>=4.0.0",
     "pyyaml>=6.0",
+    "mutagen>=1.47.0",
+    "syncedlyrics>=1.0.0",
 ]
 
 [project.optional-dependencies]

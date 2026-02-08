@@ -12,6 +12,7 @@ from pathlib import Path
 
 from .config import Config, OutputConfig
 from .encoder import atomic_ffmpeg_encode, build_ffmpeg_command
+from .lyrics import fetch_lyrics_for_file
 from .utils import (
     LOSSLESS_EXTENSIONS,
     SIDECAR_EXTENSIONS,
@@ -118,6 +119,12 @@ def process_source_file(
     
     try:
         _process_outputs(source_path, config, force)
+        # Auto-fetch lyrics if enabled and no .lrc sidecar exists
+        if config.fetch_lyrics:
+            try:
+                fetch_lyrics_for_file(source_path)
+            except Exception:
+                logger.debug("Lyrics fetch failed for %s", source_path, exc_info=True)
         sync_sidecars(source_path, config)
     finally:
         with _in_progress_lock:
