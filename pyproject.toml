@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "audio-transcode-watcher"
-version = "0.4.0"
+version = "0.4.1"
 description = "Watch a source folder and automatically transcode audio files to multiple formats"
 readme = "README.md"
 license = "GPL-3.0-or-later"
