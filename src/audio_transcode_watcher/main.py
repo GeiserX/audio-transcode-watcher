@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 import logging
 import os
 import sys
@@ -83,6 +84,7 @@ def main() -> int:
             if time.time() - last_sync >= sync_interval:
                 logger.info("Periodic sync check…")
                 initial_sync(config)
+                gc.collect()
                 last_sync = time.time()
     except KeyboardInterrupt:
         observer.stop()

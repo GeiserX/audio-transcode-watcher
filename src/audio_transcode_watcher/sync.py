@@ -385,10 +385,10 @@ def initial_sync(config: Config) -> None:
             logger.error("Error processing %s: %s", src_file, e)
     
     with ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = {executor.submit(process_one, f): f for f in source_files}
+        futures = [executor.submit(process_one, f) for f in source_files]
         for future in as_completed(futures):
-            # Just wait for completion, errors are logged in process_one
             pass
+        del futures
     
     # Remove orphans
     if safety_guard_active(config):
