@@ -248,6 +248,14 @@ pytest
 docker build -t audio-transcoder:dev .
 ```
 
+## Related Music Tools
+
+| Project | Description |
+|---------|-------------|
+| [slskd-transform](https://github.com/GeiserX/slskd-transform) | Bulk upgrade your music library from lossy to lossless via Soulseek |
+| [telegram-slskd-local-bot](https://github.com/GeiserX/telegram-slskd-local-bot) | Automated music discovery and download via Telegram |
+
+
 ## License
 
 This project is licensed under the **GNU General Public License v3.0** -- see the [LICENSE](LICENSE) file for details.
