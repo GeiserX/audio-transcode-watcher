@@ -35,6 +35,8 @@ jobs:
     permissions:
       contents: write
       packages: write
+    env:
+      PYPI_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
 
     steps:
       - uses: actions/checkout@v4
@@ -83,13 +85,31 @@ jobs:
           generate_release_notes: true
           body: |
             ## Docker Image
-            
+
             ```bash
             docker pull ${{ env.IMAGE_NAME }}:${{ steps.version.outputs.VERSION }}
             ```
-            
+
             ## What's Changed
-            
+
             See the automatically generated release notes below.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+
+      - name: Install build tools
+        run: pip install build twine
+
+      - name: Build Python package
+        run: python3 -m build
+
+      - name: Publish to PyPI
+        if: ${{ env.PYPI_TOKEN != '' }}
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+        run: twine upload dist/*
