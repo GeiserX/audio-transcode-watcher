@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/images/banner.svg" alt="audio-transcode-watcher banner" width="900" />
+  <img src="https://raw.githubusercontent.com/GeiserX/audio-transcode-watcher/main/docs/images/banner.svg" alt="audio-transcode-watcher banner" width="900" />
 </p>
 
 <p align="center">
@@ -7,6 +7,7 @@
 </p>
 
 <p align="center">
+  <a href="https://pypi.org/project/audio-transcode-watcher/"><img src="https://img.shields.io/pypi/v/audio-transcode-watcher?style=flat-square" alt="PyPI" /></a>
   <a href="https://github.com/GeiserX/audio-transcode-watcher/actions/workflows/tests.yml"><img src="https://github.com/GeiserX/audio-transcode-watcher/actions/workflows/tests.yml/badge.svg" alt="Tests" /></a>
   <a href="https://hub.docker.com/r/drumsergio/audio-transcoder"><img src="https://img.shields.io/docker/pulls/drumsergio/audio-transcoder" alt="Docker Pulls" /></a>
   <a href="https://hub.docker.com/r/drumsergio/audio-transcoder"><img src="https://img.shields.io/docker/image-size/drumsergio/audio-transcoder/latest" alt="Docker Image Size" /></a>
