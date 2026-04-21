@@ -16,7 +16,7 @@ from audio_transcode_watcher.sync import (
     safety_guard_active,
     sync_sidecars,
 )
-from audio_transcode_watcher.utils import nfc
+from audio_transcode_watcher.utils import get_rel_stem, nfc
 
 
 class TestSafetyGuard:
@@ -245,70 +245,112 @@ class TestPurgeAllOutputs:
 
 class TestCleanupOrphans:
     """Tests for _cleanup_orphans function."""
-    
+
     def test_removes_orphan_files(self, temp_dir):
         """Test that orphan files are removed."""
         source = Path(temp_dir) / "source"
         source.mkdir()
-        
+
         output = Path(temp_dir) / "output"
         output.mkdir()
         orphan = output / "Orphan - Song.m4a"
         orphan.touch()
-        
+
         config = Config(
             source_path=str(source),
             outputs=[OutputConfig(name="alac", codec="alac", path=str(output))],
         )
-        
-        # Source has no files, so "Orphan - Song" is an orphan
-        source_stems = set()
-        _cleanup_orphans(config, source_stems)
-        
+
+        _cleanup_orphans(config, set())
+
         assert not orphan.exists()
-    
+
     def test_keeps_non_orphan_files(self, temp_dir):
         """Test that non-orphan files are kept."""
         source = Path(temp_dir) / "source"
         source.mkdir()
         (source / "Valid - Song.flac").touch()
-        
+
         output = Path(temp_dir) / "output"
         output.mkdir()
         valid_output = output / "Valid - Song.m4a"
         valid_output.touch()
-        
+
         config = Config(
             source_path=str(source),
             outputs=[OutputConfig(name="alac", codec="alac", path=str(output))],
         )
-        
-        source_stems = {nfc("Valid - Song")}
-        _cleanup_orphans(config, source_stems)
-        
+
+        source_rel_stems = {nfc("Valid - Song")}
+        _cleanup_orphans(config, source_rel_stems)
+
         assert valid_output.exists()
-    
+
     def test_handles_alac_with_mp3(self, temp_dir):
         """Test ALAC folder can have both .m4a and .mp3 files."""
         source = Path(temp_dir) / "source"
         source.mkdir()
         (source / "Song.mp3").touch()
-        
+
         output = Path(temp_dir) / "output"
         output.mkdir()
         mp3_copy = output / "Song.mp3"
         mp3_copy.touch()
-        
+
         config = Config(
             source_path=str(source),
             outputs=[OutputConfig(name="alac", codec="alac", path=str(output))],
         )
-        
-        source_stems = {nfc("Song")}
-        _cleanup_orphans(config, source_stems)
-        
+
+        source_rel_stems = {nfc("Song")}
+        _cleanup_orphans(config, source_rel_stems)
+
         # MP3 copy should be kept
         assert mp3_copy.exists()
+
+    def test_recursive_removes_orphan_in_subdir(self, temp_dir):
+        """Test that orphaned files in subdirectories are removed."""
+        source = Path(temp_dir) / "source"
+        source.mkdir()
+
+        output = Path(temp_dir) / "output"
+        (output / "album1").mkdir(parents=True)
+        orphan = output / "album1" / "Orphan.m4a"
+        orphan.touch()
+
+        config = Config(
+            source_path=str(source),
+            outputs=[OutputConfig(name="alac", codec="alac", path=str(output))],
+        )
+
+        _cleanup_orphans(config, set())
+
+        assert not orphan.exists()
+        # Empty subdir should also be cleaned up
+        assert not (output / "album1").exists()
+
+    def test_recursive_keeps_non_orphan_in_subdir(self, temp_dir):
+        """Test that non-orphaned files in subdirectories are kept."""
+        source = Path(temp_dir) / "source"
+        (source / "album1").mkdir(parents=True)
+        (source / "album1" / "Song.flac").touch()
+
+        output = Path(temp_dir) / "output"
+        (output / "album1").mkdir(parents=True)
+        valid = output / "album1" / "Song.m4a"
+        valid.touch()
+
+        config = Config(
+            source_path=str(source),
+            outputs=[OutputConfig(name="alac", codec="alac", path=str(output))],
+        )
+
+        source_rel_stems = {get_rel_stem(
+            str(source / "album1" / "Song.flac"), str(source),
+        )}
+        _cleanup_orphans(config, source_rel_stems)
+
+        assert valid.exists()
 
 
 class TestSyncSidecars:
@@ -476,3 +518,22 @@ class TestCleanupOrphanSidecars:
         _cleanup_orphans(config, {nfc("Valid - Song")})
 
         assert valid_lrc.exists()
+
+    def test_recursive_removes_orphan_lrc_in_subdir(self, temp_dir):
+        """Test that orphaned .lrc in subdirectories are removed."""
+        source = Path(temp_dir) / "source"
+        source.mkdir()
+
+        output = Path(temp_dir) / "output"
+        (output / "album").mkdir(parents=True)
+        orphan_lrc = output / "album" / "Gone.lrc"
+        orphan_lrc.touch()
+
+        config = Config(
+            source_path=str(source),
+            outputs=[OutputConfig(name="out", codec="aac", path=str(output))],
+        )
+
+        _cleanup_orphans(config, set())
+
+        assert not orphan_lrc.exists()

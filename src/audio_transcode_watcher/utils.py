@@ -142,9 +142,65 @@ def wait_for_stable(
 def get_output_filename(source_path: str, extension: str) -> str:
     """
     Get the output filename for a source file.
-    
+
     Uses the stem of the source file and adds the new extension.
     All components are NFC-normalized.
     """
     stem = nfc(Path(source_path).stem)
     return f"{stem}{extension}"
+
+
+def get_output_file_path(
+    source_file: str,
+    source_root: str,
+    output_root: str,
+    output_filename: str,
+) -> str:
+    """
+    Compute destination path preserving source directory structure.
+
+    For flat source dirs the result is ``output_root/output_filename``.
+    For nested dirs the relative subdirectory is mirrored in the output.
+    """
+    rel_dir = os.path.relpath(os.path.dirname(source_file), source_root)
+    if rel_dir == ".":
+        return nfc_path(os.path.join(output_root, output_filename))
+    return nfc_path(os.path.join(output_root, rel_dir, output_filename))
+
+
+def get_rel_stem(filepath: str, root: str) -> str:
+    """
+    Return the relative path from *root* with the file extension stripped.
+
+    Example: ``get_rel_stem("/music/flac/album/song.flac", "/music/flac")``
+    returns ``"album/song"``.  For flat dirs it returns just the stem.
+    """
+    rel = os.path.relpath(filepath, root)
+    rel_dir = os.path.dirname(rel)
+    stem = nfc(Path(rel).stem)
+    if rel_dir == ".":
+        return stem
+    return nfc_path(os.path.join(rel_dir, stem))
+
+
+def walk_audio_files(directory: str) -> list[str]:
+    """Recursively collect all audio files under *directory*."""
+    files: list[str] = []
+    for dirpath, _dirnames, filenames in os.walk(directory):
+        for fname in filenames:
+            full = os.path.join(dirpath, fname)
+            if has_audio_extension(full):
+                files.append(full)
+    return files
+
+
+def remove_empty_dirs(root: str) -> None:
+    """Remove empty subdirectories bottom-up (never removes *root* itself)."""
+    for dirpath, dirnames, filenames in os.walk(root, topdown=False):
+        if dirpath == root:
+            continue
+        try:
+            if not os.listdir(dirpath):
+                os.rmdir(dirpath)
+        except OSError:
+            pass

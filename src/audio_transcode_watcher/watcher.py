@@ -104,6 +104,6 @@ def start_watcher(config: Config) -> Observer:
     """
     observer = Observer()
     handler = AudioSyncHandler(config)
-    observer.schedule(handler, config.source_path, recursive=False)
+    observer.schedule(handler, config.source_path, recursive=True)
     observer.start()
     return observer

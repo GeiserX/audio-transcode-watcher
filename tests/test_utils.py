@@ -6,7 +6,9 @@ import pytest
 
 from audio_transcode_watcher.utils import (
     appears_empty_dir,
+    get_output_file_path,
     get_output_filename,
+    get_rel_stem,
     has_audio_extension,
     has_sidecar_extension,
     is_audio_file,
@@ -14,6 +16,8 @@ from audio_transcode_watcher.utils import (
     is_mp3,
     nfc,
     nfc_path,
+    remove_empty_dirs,
+    walk_audio_files,
 )
 
 
@@ -242,3 +246,105 @@ class TestGetOutputFilename:
         result = get_output_filename(nfd_name, ".m4a")
         # Should be NFC
         assert result == "Café Song.m4a"
+
+
+class TestGetOutputFilePath:
+    """Tests for get_output_file_path function."""
+
+    def test_flat_directory(self):
+        """Test flat dir returns output_root/filename."""
+        result = get_output_file_path(
+            "/music/flac/song.flac", "/music/flac", "/music/mp3", "song.mp3",
+        )
+        assert result == "/music/mp3/song.mp3"
+
+    def test_nested_directory(self):
+        """Test nested dir preserves relative structure."""
+        result = get_output_file_path(
+            "/music/flac/album1/song.flac", "/music/flac", "/music/mp3", "song.mp3",
+        )
+        assert result == "/music/mp3/album1/song.mp3"
+
+    def test_deeply_nested(self):
+        """Test deeply nested structure."""
+        result = get_output_file_path(
+            "/music/flac/artist/album/song.flac",
+            "/music/flac",
+            "/music/mp3",
+            "song.mp3",
+        )
+        assert result == "/music/mp3/artist/album/song.mp3"
+
+
+class TestGetRelStem:
+    """Tests for get_rel_stem function."""
+
+    def test_flat(self):
+        """Flat file returns just the stem."""
+        assert get_rel_stem("/music/flac/song.flac", "/music/flac") == "song"
+
+    def test_nested(self):
+        """Nested file returns rel_dir/stem."""
+        result = get_rel_stem("/music/flac/album1/song.flac", "/music/flac")
+        assert result == "album1/song"
+
+    def test_unicode_normalized(self):
+        """Unicode stems are NFC-normalized."""
+        result = get_rel_stem("/music/Cafe\u0301.flac", "/music")
+        assert result == "Café"
+
+
+class TestWalkAudioFiles:
+    """Tests for walk_audio_files function."""
+
+    def test_flat(self, temp_dir):
+        """Finds files in flat directory."""
+        (Path(temp_dir) / "a.flac").touch()
+        (Path(temp_dir) / "b.mp3").touch()
+        (Path(temp_dir) / "readme.txt").touch()
+        result = walk_audio_files(temp_dir)
+        assert len(result) == 2
+
+    def test_recursive(self, temp_dir):
+        """Finds files in nested directories."""
+        sub = Path(temp_dir) / "album"
+        sub.mkdir()
+        (sub / "a.flac").touch()
+        (Path(temp_dir) / "b.flac").touch()
+        result = walk_audio_files(temp_dir)
+        assert len(result) == 2
+
+    def test_empty(self, temp_dir):
+        """Returns empty list for empty directory."""
+        assert walk_audio_files(temp_dir) == []
+
+
+class TestRemoveEmptyDirs:
+    """Tests for remove_empty_dirs function."""
+
+    def test_removes_empty_subdirs(self, temp_dir):
+        """Removes empty subdirectories."""
+        sub = Path(temp_dir) / "empty"
+        sub.mkdir()
+        remove_empty_dirs(temp_dir)
+        assert not sub.exists()
+
+    def test_keeps_root(self, temp_dir):
+        """Never removes root itself."""
+        remove_empty_dirs(temp_dir)
+        assert Path(temp_dir).exists()
+
+    def test_keeps_non_empty_subdirs(self, temp_dir):
+        """Keeps subdirectories that contain files."""
+        sub = Path(temp_dir) / "has_files"
+        sub.mkdir()
+        (sub / "file.txt").touch()
+        remove_empty_dirs(temp_dir)
+        assert sub.exists()
+
+    def test_nested_empty_cleanup(self, temp_dir):
+        """Removes nested empty dirs bottom-up."""
+        deep = Path(temp_dir) / "a" / "b" / "c"
+        deep.mkdir(parents=True)
+        remove_empty_dirs(temp_dir)
+        assert not (Path(temp_dir) / "a").exists()
