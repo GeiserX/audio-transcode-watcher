@@ -76,7 +76,7 @@ outputs:
 ```yaml
 services:
   audio-transcoder:
-    image: drumsergio/audio-transcoder:0.5.0
+    image: drumsergio/audio-transcoder:0.5.1
     container_name: audio_transcoder
     environment:
       - TZ=Europe/Madrid
@@ -107,7 +107,7 @@ docker run -d \
   -v /path/to/flac:/music/flac:ro \
   -v /path/to/mp3:/music/mp3 \
   --restart unless-stopped \
-  drumsergio/audio-transcoder:0.5.0
+  drumsergio/audio-transcoder:0.5.1
 ```
 
 ## Configuration
@@ -166,6 +166,15 @@ settings:
 
   # Minimum time a file must be unchanged before processing (seconds)
   min_stable_seconds: 1.0
+
+  # Auto-fetch synced .lrc lyrics (default: true)
+  fetch_lyrics: true
+
+  # Use Whisper local transcription as fallback when no lyrics found online (default: true)
+  whisper_fallback: true
+
+  # Whisper model size: tiny, base, small, medium, large (default: base)
+  whisper_model: base
 ```
 
 ### Supported Codecs
