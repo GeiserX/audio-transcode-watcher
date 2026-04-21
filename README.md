@@ -34,6 +34,7 @@ Perfect for maintaining a music library in multiple formats -- lossless for arch
 ## Features
 
 - **Real-time file watching** -- Detects new, modified, renamed, or deleted files via watchdog
+- **Recursive directory support** -- Mirrors source folder hierarchy (Artist/Album) in all outputs
 - **Multiple simultaneous outputs** -- Transcode to any number of formats in a single pass
 - **Six codecs** -- ALAC, AAC, MP3, Opus, FLAC, WAV with configurable bitrates
 - **Synced lyrics** -- Auto-fetches `.lrc` lyrics with Whisper speech-to-text fallback
@@ -75,7 +76,7 @@ outputs:
 ```yaml
 services:
   audio-transcoder:
-    image: drumsergio/audio-transcoder:0.4.1
+    image: drumsergio/audio-transcoder:0.5.0
     container_name: audio_transcoder
     environment:
       - TZ=Europe/Madrid
@@ -106,7 +107,7 @@ docker run -d \
   -v /path/to/flac:/music/flac:ro \
   -v /path/to/mp3:/music/mp3 \
   --restart unless-stopped \
-  drumsergio/audio-transcoder:0.4.1
+  drumsergio/audio-transcoder:0.5.0
 ```
 
 ## Configuration
@@ -197,6 +198,26 @@ environment:
    - **Deleted files** have their corresponding outputs removed
 3. **Orphan cleanup** -- Removes output files that no longer have a matching source.
 4. **Lyrics sync** -- Fetches synced `.lrc` lyrics from online databases; falls back to Whisper transcription when no lyrics are found.
+
+### Recursive Directory Support
+
+Source folder hierarchy is automatically mirrored in all outputs. Both flat and nested structures work out of the box -- no configuration needed.
+
+```text
+Source:                          Output (MP3):
+/music/flac/                     /music/mp3/
+├── Artist A/                    ├── Artist A/
+│   ├── Album 1/                 │   ├── Album 1/
+│   │   ├── 01 - Track.flac     │   │   ├── 01 - Track.mp3
+│   │   └── 02 - Track.flac     │   │   └── 02 - Track.mp3
+│   └── Album 2/                 │   └── Album 2/
+│       └── 01 - Song.flac      │       └── 01 - Song.mp3
+└── Artist B/                    └── Artist B/
+    └── Live Album/                  └── Live Album/
+        └── 01 - Intro.flac             └── 01 - Intro.mp3
+```
+
+When source files or directories are deleted, the corresponding outputs and empty directories are cleaned up automatically.
 
 ### Safety Guards
 

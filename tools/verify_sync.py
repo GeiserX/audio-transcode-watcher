@@ -220,25 +220,37 @@ def compare_metadata(
     return differences
 
 
+def get_rel_stem(filepath: str, root: str) -> str:
+    """Return the relative path from *root* with the file extension stripped."""
+    rel = os.path.relpath(filepath, root)
+    rel_dir = os.path.dirname(rel)
+    stem = get_stem(os.path.basename(filepath))
+    if rel_dir == ".":
+        return stem
+    rel_dir = nfc(rel_dir)
+    return os.path.join(rel_dir, stem)
+
+
 def list_audio_files(directory: str, extensions: set[str]) -> dict[str, str]:
     """
-    List audio files in directory matching extensions.
-    Returns dict mapping normalized stem -> full filepath.
+    Recursively list audio files in directory matching extensions.
+    Returns dict mapping relative stem (preserving subdirectory) -> full filepath.
     """
     files = {}
     if not os.path.isdir(directory):
         return files
-    
+
     try:
-        for entry in os.scandir(directory):
-            if entry.is_file():
-                ext = Path(entry.name).suffix.lower()
+        for dirpath, _dirnames, filenames in os.walk(directory):
+            for fname in filenames:
+                ext = Path(fname).suffix.lower()
                 if ext in extensions:
-                    stem = get_stem(entry.name)
-                    files[stem] = entry.path
+                    full = os.path.join(dirpath, fname)
+                    rel_stem = get_rel_stem(full, directory)
+                    files[rel_stem] = full
     except Exception as e:
         print(f"Error scanning {directory}: {e}", file=sys.stderr)
-    
+
     return files
 
 

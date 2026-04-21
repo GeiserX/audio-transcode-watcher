@@ -1,91 +1,71 @@
 # Roadmap
 
-Future improvements and features for audio-transcode-watcher.
+Current version: **0.5.0**
 
-## v0.2.0 - Quality of Life
+## Completed
+
+- **Parallel encoding** with configurable workers (v0.1.0)
+- **Lossless source priority** over MP3 duplicates (v0.1.1)
+- **Stale temp file cleanup** on startup (v0.1.2)
+- **Synced lyrics sidecar** (.lrc) copying to outputs (v0.2.0)
+- **Auto-fetch synced lyrics** via syncedlyrics providers (v0.3.0)
+- **Whisper local transcription fallback** for lyrics (v0.4.0)
+- **Recursive directory support** -- mirror source folder hierarchy in outputs (v0.5.0)
+
+## v0.6.0 -- Quality of Life
 
 - [ ] **Progress reporting during initial sync**
-  - Show progress bar or percentage during bulk encoding
-  - Estimated time remaining
-
-- [ ] **Health check endpoint**
-  - HTTP endpoint for container health monitoring
-  - Prometheus metrics (files processed, errors, queue size)
+  - Show file count progress (e.g. 42/500)
+  - Log estimated time remaining for large libraries
 
 - [ ] **Graceful shutdown**
   - Complete in-progress encodes before stopping
-  - Resume interrupted syncs
-
-## v0.3.0 - Advanced Features
-
-- [ ] **Folder structure preservation**
-  - Option to mirror source folder hierarchy in outputs
-  - Support for Artist/Album/Track structure
-
-- [ ] **Quality profiles**
-  - Pre-defined quality presets (high, medium, low)
-  - Per-folder quality overrides
-
-- [ ] **Smart re-encoding**
-  - Detect source file changes (checksum-based)
-  - Only re-encode when source actually changed, not just touched
-
-- [ ] **Replay gain support**
-  - Calculate and embed replay gain tags
-  - Album and track gain modes
-
-## v0.4.0 - Performance & Scalability
-
-- [ ] **FFmpeg multi-output**
-  - Single decode, multiple encodes (FFmpeg tee muxer)
-  - Reduces CPU usage for multiple outputs from same source
-
-- [ ] **Distributed encoding**
-  - Queue-based architecture (Redis/RabbitMQ)
-  - Multiple worker nodes for large libraries
-
-- [ ] **GPU acceleration**
-  - NVENC/VAAPI support for compatible codecs
-  - Hardware-accelerated AAC encoding
-
-## v0.5.0 - User Experience
-
-- [ ] **Web UI dashboard**
-  - Real-time encoding status
-  - Queue management
-  - Configuration editor
-
-- [ ] **Notifications**
-  - Webhook support for encoding events
-  - Discord/Telegram/Email notifications
-  - Error alerts
+  - Resume interrupted syncs on next startup
 
 - [ ] **Dry-run mode**
   - Preview what would be encoded without doing it
   - Useful for testing configuration changes
 
+## v0.7.0 -- Observability
+
+- [ ] **Health check endpoint**
+  - HTTP endpoint for container health monitoring
+  - Prometheus metrics (files processed, errors, queue size)
+
+- [ ] **Notifications**
+  - Webhook/Shoutrrr support for encoding events
+  - Error alerts for failed encodes
+
+## v0.8.0 -- Smart Encoding
+
+- [ ] **FFmpeg multi-output (tee muxer)**
+  - Single decode pass, multiple encodes
+  - Significant CPU reduction for multi-output configurations
+
+- [ ] **Checksum-based re-encoding**
+  - Detect actual content changes vs. metadata-only touches
+  - Skip re-encode when source content is unchanged
+
+- [ ] **Replay gain support**
+  - Calculate and embed replay gain tags
+  - Album and track gain modes
+
 ## Future Ideas (Backlog)
 
 ### Format Support
 - [ ] Ogg Vorbis output codec
-- [ ] WavPack input support
 - [ ] DSD/DSF input support (convert to PCM first)
-- [ ] Multi-channel audio handling (5.1 → stereo downmix option)
+- [ ] Multi-channel audio handling (5.1 to stereo downmix option)
 
 ### Metadata
-- [ ] Lyrics preservation (embedded and .lrc sidecar)
 - [ ] MusicBrainz integration for missing metadata
-- [ ] Custom metadata mapping rules
 - [ ] Chapter markers for audiobooks
 
 ### Integration
 - [ ] Plex/Jellyfin library refresh triggers
 - [ ] Lidarr/Beets integration
-- [ ] S3/MinIO source and destination support
-- [ ] SFTP/SMB remote sources
 
 ### Analysis
-- [ ] Audio quality analysis (clipping detection)
 - [ ] Loudness normalization (EBU R128)
 - [ ] Silence trimming option
 - [ ] Duplicate detection
