@@ -21,6 +21,7 @@ from .utils import (
     has_audio_extension,
     has_sidecar_extension,
     is_audio_file,
+    nfc_path,
     remove_empty_dirs,
     walk_audio_files,
 )
@@ -29,26 +30,47 @@ from .utils import (
 class AudioSyncHandler(FileSystemEventHandler):
     """
     Watchdog event handler for audio file changes.
-    
+
     Handles file creation, modification, deletion, and rename events.
     """
-    
+
+    # Ignore on_modified events for files processed within this window.
+    # Prevents encode-delete loops caused by spurious filesystem events
+    # (e.g. directory mtime change after .lrc sidecar creation).
+    _EVENT_COOLDOWN = 10.0
+
     def __init__(self, config: Config) -> None:
         super().__init__()
         self.config = config
-    
+        self._processed_at: dict[str, float] = {}
+        self._processed_lock = threading.Lock()
+
+    def _mark_processed(self, path: str) -> None:
+        """Record that a file was just processed."""
+        key = nfc_path(path)
+        with self._processed_lock:
+            self._processed_at[key] = time.monotonic()
+
+    def _is_cooling_down(self, path: str) -> bool:
+        """Check if a file was recently processed and should be skipped."""
+        key = nfc_path(path)
+        with self._processed_lock:
+            ts = self._processed_at.get(key, 0.0)
+        return (time.monotonic() - ts) < self._EVENT_COOLDOWN
+
     def _process_later(self, path: str, force: bool = False) -> None:
         """Process a file after a brief delay to coalesce rapid events."""
         if not is_audio_file(path):
             return
-        
+
         # Small delay to coalesce burst events
         time.sleep(0.2)
-        
+
         if safety_guard_active(self.config):
             return
-        
+
         process_source_file(path, self.config, force=force, check_stable=True)
+        self._mark_processed(path)
     
     def on_created(self, event) -> None:
         """Handle file creation (audio or sidecar)."""
@@ -64,14 +86,18 @@ class AudioSyncHandler(FileSystemEventHandler):
         """Handle file modification (audio or sidecar)."""
         if event.is_directory:
             return
-        
+
         if safety_guard_active(self.config):
             return
-        
+
         if has_sidecar_extension(event.src_path):
             sync_sidecars(event.src_path, self.config)
-        else:
-            # Delete old outputs first, then re-encode
+        elif has_audio_extension(event.src_path):
+            # Skip spurious events for files we just finished processing.
+            # Common on Docker bind mounts where .lrc creation triggers
+            # a directory mtime change that emits modify for siblings.
+            if self._is_cooling_down(event.src_path):
+                return
             delete_outputs(event.src_path, self.config)
             self._process_later(event.src_path, force=True)
     
