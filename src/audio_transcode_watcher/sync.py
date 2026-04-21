@@ -239,6 +239,10 @@ def delete_outputs(source_path: str, config: Config) -> None:
     # Also remove sidecar files from all outputs
     delete_sidecars(source_path, config)
 
+    # Clean up empty subdirectories left after deletions
+    for output in config.outputs:
+        remove_empty_dirs(output.path)
+
 
 def sync_sidecars(source_path: str, config: Config) -> None:
     """
@@ -398,9 +402,8 @@ def initial_sync(config: Config) -> None:
 
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = [executor.submit(process_one, f) for f in source_files]
-        for future in as_completed(futures):
+        for _ in as_completed(futures):
             pass
-        del futures
 
     # Remove orphans
     if safety_guard_active(config):
@@ -408,7 +411,10 @@ def initial_sync(config: Config) -> None:
         logger.info("Initial sync complete (partial).")
         return
 
-    _cleanup_orphans(config, source_rel_stems)
+    if not source_rel_stems:
+        logger.warning("No source files found; skipping orphan cleanup to avoid wiping outputs.")
+    else:
+        _cleanup_orphans(config, source_rel_stems)
     logger.info("Initial sync complete.")
 
 
@@ -428,7 +434,7 @@ def _cleanup_orphans(config: Config, source_rel_stems: set[str]) -> None:
                     full = os.path.join(dirpath, fname)
                     lossless_rel_stems.add(get_rel_stem(full, config.source_path))
     except Exception:
-        pass
+        logger.debug("Failed to enumerate lossless sources for orphan cleanup", exc_info=True)
 
     for output in config.outputs:
         # Valid extensions for this output

@@ -203,7 +203,7 @@ environment:
 
 Source folder hierarchy is automatically mirrored in all outputs. Both flat and nested structures work out of the box -- no configuration needed.
 
-```
+```text
 Source:                          Output (MP3):
 /music/flac/                     /music/mp3/
 ├── Artist A/                    ├── Artist A/

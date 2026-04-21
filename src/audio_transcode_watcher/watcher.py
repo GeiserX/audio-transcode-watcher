@@ -15,7 +15,14 @@ from .sync import (
     safety_guard_active,
     sync_sidecars,
 )
-from .utils import has_audio_extension, has_sidecar_extension, is_audio_file
+from .utils import (
+    get_output_file_path,
+    has_audio_extension,
+    has_sidecar_extension,
+    is_audio_file,
+    remove_empty_dirs,
+    walk_audio_files,
+)
 
 
 class AudioSyncHandler(FileSystemEventHandler):
@@ -67,29 +74,47 @@ class AudioSyncHandler(FileSystemEventHandler):
             delete_outputs(event.src_path, self.config)
             self._process_later(event.src_path, force=True)
     
+    def _handle_directory_delete(self, dir_path: str) -> None:
+        """Clean up mirrored output subtrees when a source directory is removed."""
+        import os
+        rel_dir = os.path.relpath(dir_path, self.config.source_path)
+        for output in self.config.outputs:
+            mirrored = os.path.join(output.path, rel_dir)
+            if os.path.isdir(mirrored):
+                for dirpath, _dirnames, filenames in os.walk(mirrored, topdown=False):
+                    for fname in filenames:
+                        try:
+                            os.remove(os.path.join(dirpath, fname))
+                        except OSError:
+                            pass
+                remove_empty_dirs(output.path)
+
     def on_moved(self, event) -> None:
-        """Handle file rename/move (audio or sidecar)."""
+        """Handle file or directory rename/move."""
         if event.is_directory:
+            # Directory move: delete old outputs, re-process new subtree
+            self._handle_directory_delete(event.src_path)
+            for f in walk_audio_files(event.dest_path):
+                self._process_later(f, force=True)
             return
-        
+
         if has_sidecar_extension(event.src_path) or has_sidecar_extension(event.dest_path):
-            # Delete old sidecar copies, sync new ones
             if has_sidecar_extension(event.src_path):
                 delete_sidecars(event.src_path, self.config)
             if has_sidecar_extension(event.dest_path):
                 sync_sidecars(event.dest_path, self.config)
         else:
-            # Audio file move
             if has_audio_extension(event.src_path):
                 delete_outputs(event.src_path, self.config)
             if is_audio_file(event.dest_path):
                 self._process_later(event.dest_path, force=True)
-    
+
     def on_deleted(self, event) -> None:
-        """Handle file deletion (audio or sidecar)."""
+        """Handle file or directory deletion."""
         if event.is_directory:
+            self._handle_directory_delete(event.src_path)
             return
-        
+
         if has_sidecar_extension(event.src_path):
             delete_sidecars(event.src_path, self.config)
         elif has_audio_extension(event.src_path):

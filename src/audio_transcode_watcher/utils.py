@@ -196,7 +196,7 @@ def walk_audio_files(directory: str) -> list[str]:
 
 def remove_empty_dirs(root: str) -> None:
     """Remove empty subdirectories bottom-up (never removes *root* itself)."""
-    for dirpath, dirnames, filenames in os.walk(root, topdown=False):
+    for dirpath, _dirnames, _filenames in os.walk(root, topdown=False):
         if dirpath == root:
             continue
         try:

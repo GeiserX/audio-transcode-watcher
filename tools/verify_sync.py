@@ -227,6 +227,7 @@ def get_rel_stem(filepath: str, root: str) -> str:
     stem = get_stem(os.path.basename(filepath))
     if rel_dir == ".":
         return stem
+    rel_dir = nfc(rel_dir)
     return os.path.join(rel_dir, stem)
 
 
