@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import threading
 import time
 
 from watchdog.events import FileSystemEventHandler
@@ -16,7 +18,6 @@ from .sync import (
     sync_sidecars,
 )
 from .utils import (
-    get_output_file_path,
     has_audio_extension,
     has_sidecar_extension,
     is_audio_file,
@@ -76,8 +77,11 @@ class AudioSyncHandler(FileSystemEventHandler):
     
     def _handle_directory_delete(self, dir_path: str) -> None:
         """Clean up mirrored output subtrees when a source directory is removed."""
-        import os
+        if safety_guard_active(self.config):
+            return
         rel_dir = os.path.relpath(dir_path, self.config.source_path)
+        if rel_dir == "." or rel_dir.startswith(".."):
+            return
         for output in self.config.outputs:
             mirrored = os.path.join(output.path, rel_dir)
             if os.path.isdir(mirrored):
@@ -89,13 +93,20 @@ class AudioSyncHandler(FileSystemEventHandler):
                             pass
                 remove_empty_dirs(output.path)
 
+    def _reprocess_directory(self, directory: str) -> None:
+        """Re-process all audio files in a directory in a background thread."""
+        for f in walk_audio_files(directory):
+            self._process_later(f, force=True)
+
     def on_moved(self, event) -> None:
         """Handle file or directory rename/move."""
         if event.is_directory:
-            # Directory move: delete old outputs, re-process new subtree
             self._handle_directory_delete(event.src_path)
-            for f in walk_audio_files(event.dest_path):
-                self._process_later(f, force=True)
+            threading.Thread(
+                target=self._reprocess_directory,
+                args=(event.dest_path,),
+                daemon=True,
+            ).start()
             return
 
         if has_sidecar_extension(event.src_path) or has_sidecar_extension(event.dest_path):
