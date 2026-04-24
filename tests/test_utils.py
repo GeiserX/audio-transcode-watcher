@@ -1,6 +1,7 @@
 """Tests for utility functions."""
 
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -17,6 +18,7 @@ from audio_transcode_watcher.utils import (
     nfc,
     nfc_path,
     remove_empty_dirs,
+    wait_for_stable,
     walk_audio_files,
 )
 
@@ -348,3 +350,72 @@ class TestRemoveEmptyDirs:
         deep.mkdir(parents=True)
         remove_empty_dirs(temp_dir)
         assert not (Path(temp_dir) / "a").exists()
+
+    def test_handles_os_error_on_rmdir(self, temp_dir):
+        """Gracefully handle OSError when removing directory."""
+        sub = Path(temp_dir) / "locked"
+        sub.mkdir()
+        with patch("os.rmdir", side_effect=OSError("permission denied")):
+            # Should not raise
+            remove_empty_dirs(temp_dir)
+
+
+class TestWaitForStable:
+    """Tests for wait_for_stable function."""
+
+    def test_returns_true_for_stable_file(self, temp_dir):
+        """Return True when file size is stable."""
+        f = Path(temp_dir) / "stable.flac"
+        f.write_text("content")
+        result = wait_for_stable(str(f), min_stable_secs=0.1, timeout=2.0)
+        assert result is True
+
+    def test_returns_false_for_nonexistent_file(self, temp_dir):
+        """Return False when file does not exist."""
+        result = wait_for_stable(str(Path(temp_dir) / "missing.flac"), timeout=0.5)
+        assert result is False
+
+    def test_returns_false_when_file_disappears_during_check(self, temp_dir):
+        """Return False when file disappears mid-check."""
+        f = Path(temp_dir) / "vanishing.flac"
+        f.write_text("content")
+
+        call_count = [0]
+        original_getsize = __import__("os").path.getsize
+
+        def flaky_getsize(p):
+            call_count[0] += 1
+            if call_count[0] > 1:
+                raise OSError("gone")
+            return original_getsize(p)
+
+        with patch("os.path.getsize", side_effect=flaky_getsize):
+            result = wait_for_stable(str(f), min_stable_secs=0.1, timeout=1.0)
+
+        assert result is False
+
+    def test_returns_false_on_timeout(self, temp_dir):
+        """Return False when file keeps changing and times out."""
+        f = Path(temp_dir) / "changing.flac"
+        f.write_text("v1")
+
+        grow_count = [0]
+
+        def growing_getsize(p):
+            grow_count[0] += 1
+            return grow_count[0] * 100  # Always different
+
+        with patch("os.path.getsize", side_effect=growing_getsize):
+            result = wait_for_stable(str(f), min_stable_secs=0.5, timeout=0.3)
+
+        assert result is False
+
+
+class TestAppearsEmptyDirError:
+    """Tests for appears_empty_dir exception handling."""
+
+    def test_returns_true_on_scandir_error(self):
+        """Return True when scandir raises an exception."""
+        with patch("os.path.isdir", return_value=True), \
+             patch("os.scandir", side_effect=PermissionError("denied")):
+            assert appears_empty_dir("/some/path") is True

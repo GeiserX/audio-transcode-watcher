@@ -8,7 +8,10 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from audio_transcode_watcher.lyrics import (
+    _get_whisper_model,
     _segments_to_lrc,
+    _transcribe_with_whisper,
+    _write_lrc,
     extract_metadata,
     fetch_lyrics_for_file,
 )
@@ -160,4 +163,173 @@ class TestFetchLyricsForFile:
         audio = tmp_path / "noinfo.flac"
         audio.touch()
         result = fetch_lyrics_for_file(str(audio), whisper_fallback=False)
+        assert result is None
+
+    @patch("audio_transcode_watcher.lyrics.syncedlyrics")
+    @patch("audio_transcode_watcher.lyrics.extract_metadata")
+    def test_handles_syncedlyrics_exception(self, mock_meta, mock_syncedlyrics, tmp_path):
+        """Handle exception from syncedlyrics.search gracefully."""
+        audio = tmp_path / "Artist - Song.flac"
+        audio.touch()
+        mock_meta.return_value = ("Artist", "Song")
+        mock_syncedlyrics.search.side_effect = Exception("network error")
+
+        result = fetch_lyrics_for_file(str(audio), whisper_fallback=False)
+        assert result is None
+
+    @patch("audio_transcode_watcher.lyrics._transcribe_with_whisper")
+    @patch("audio_transcode_watcher.lyrics.syncedlyrics")
+    @patch("audio_transcode_watcher.lyrics.extract_metadata")
+    def test_whisper_fallback_with_no_metadata(self, mock_meta, mock_syncedlyrics, mock_whisper, tmp_path):
+        """Use filename stem as label when whisper fallback has no metadata."""
+        audio = tmp_path / "instrumental.flac"
+        audio.touch()
+        mock_meta.return_value = None
+        mock_whisper.return_value = "[00:00.00] Instrumental"
+
+        result = fetch_lyrics_for_file(str(audio), whisper_fallback=True)
+        assert result is not None
+        assert result.endswith(".lrc")
+        content = open(result).read()
+        assert "Instrumental" in content
+
+
+class TestGetWhisperModel:
+    """Tests for _get_whisper_model function."""
+
+    def test_returns_none_when_load_previously_failed(self):
+        """Return None immediately if a prior load attempt failed."""
+        import audio_transcode_watcher.lyrics as lmod
+
+        original_failed = lmod._whisper_load_failed
+        original_model = lmod._whisper_model
+        try:
+            lmod._whisper_load_failed = True
+            lmod._whisper_model = None
+            result = _get_whisper_model("base")
+            assert result is None
+        finally:
+            lmod._whisper_load_failed = original_failed
+            lmod._whisper_model = original_model
+
+    def test_returns_cached_model(self):
+        """Return cached model if already loaded."""
+        import audio_transcode_watcher.lyrics as lmod
+
+        original_failed = lmod._whisper_load_failed
+        original_model = lmod._whisper_model
+        try:
+            lmod._whisper_load_failed = False
+            sentinel = MagicMock()
+            lmod._whisper_model = sentinel
+            result = _get_whisper_model("base")
+            assert result is sentinel
+        finally:
+            lmod._whisper_load_failed = original_failed
+            lmod._whisper_model = original_model
+
+    @patch("audio_transcode_watcher.lyrics.whisper", create=True)
+    def test_loads_model_on_first_call(self, mock_whisper_module):
+        """Load whisper model on first call and cache it."""
+        import audio_transcode_watcher.lyrics as lmod
+
+        original_failed = lmod._whisper_load_failed
+        original_model = lmod._whisper_model
+        try:
+            lmod._whisper_load_failed = False
+            lmod._whisper_model = None
+
+            sentinel = MagicMock()
+
+            # We need to patch the import inside _get_whisper_model
+            with patch.dict("sys.modules", {"whisper": mock_whisper_module}):
+                mock_whisper_module.load_model.return_value = sentinel
+                result = _get_whisper_model("tiny")
+                assert result is sentinel
+                assert lmod._whisper_model is sentinel
+        finally:
+            lmod._whisper_load_failed = original_failed
+            lmod._whisper_model = original_model
+
+    def test_sets_failed_flag_on_import_error(self):
+        """Set _whisper_load_failed when whisper import fails."""
+        import audio_transcode_watcher.lyrics as lmod
+
+        original_failed = lmod._whisper_load_failed
+        original_model = lmod._whisper_model
+        try:
+            lmod._whisper_load_failed = False
+            lmod._whisper_model = None
+
+            with patch.dict("sys.modules", {"whisper": None}):
+                result = _get_whisper_model("base")
+                assert result is None
+                assert lmod._whisper_load_failed is True
+        finally:
+            lmod._whisper_load_failed = original_failed
+            lmod._whisper_model = original_model
+
+
+class TestTranscribeWithWhisper:
+    """Tests for _transcribe_with_whisper function."""
+
+    @patch("audio_transcode_watcher.lyrics._get_whisper_model")
+    def test_returns_none_when_model_unavailable(self, mock_get):
+        """Return None when whisper model cannot be loaded."""
+        mock_get.return_value = None
+        result = _transcribe_with_whisper("/music/song.flac")
+        assert result is None
+
+    @patch("audio_transcode_watcher.lyrics._get_whisper_model")
+    def test_returns_lrc_on_successful_transcription(self, mock_get):
+        """Return LRC content on successful Whisper transcription."""
+        mock_model = MagicMock()
+        mock_model.transcribe.return_value = {
+            "segments": [
+                {"start": 0.0, "text": "Hello world"},
+                {"start": 5.5, "text": "Second line"},
+            ]
+        }
+        mock_get.return_value = mock_model
+
+        result = _transcribe_with_whisper("/music/song.flac", "base")
+        assert result is not None
+        assert "Hello world" in result
+        assert "Second line" in result
+
+    @patch("audio_transcode_watcher.lyrics._get_whisper_model")
+    def test_returns_none_when_no_segments(self, mock_get):
+        """Return None when Whisper produces no segments."""
+        mock_model = MagicMock()
+        mock_model.transcribe.return_value = {"segments": []}
+        mock_get.return_value = mock_model
+
+        result = _transcribe_with_whisper("/music/song.flac")
+        assert result is None
+
+    @patch("audio_transcode_watcher.lyrics._get_whisper_model")
+    def test_returns_none_on_transcription_exception(self, mock_get):
+        """Return None when Whisper transcription raises exception."""
+        mock_model = MagicMock()
+        mock_model.transcribe.side_effect = RuntimeError("CUDA error")
+        mock_get.return_value = mock_model
+
+        result = _transcribe_with_whisper("/music/song.flac")
+        assert result is None
+
+
+class TestWriteLrc:
+    """Tests for _write_lrc function."""
+
+    def test_writes_content_to_file(self, tmp_path):
+        """Write LRC content and return path."""
+        lrc_path = str(tmp_path / "song.lrc")
+        result = _write_lrc(lrc_path, "[00:01.00] Hello", "Artist - Song", "syncedlyrics")
+        assert result == lrc_path
+        assert open(lrc_path).read() == "[00:01.00] Hello"
+
+    def test_returns_none_on_write_error(self, tmp_path):
+        """Return None when writing fails."""
+        with patch("builtins.open", side_effect=PermissionError("denied")):
+            result = _write_lrc("/impossible/path.lrc", "content", "label", "source")
         assert result is None
