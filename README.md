@@ -13,6 +13,7 @@
   <a href="https://hub.docker.com/r/drumsergio/audio-transcoder"><img src="https://img.shields.io/docker/image-size/drumsergio/audio-transcoder/latest" alt="Docker Image Size" /></a>
   <a href="https://www.gnu.org/licenses/gpl-3.0"><img src="https://img.shields.io/badge/License-GPLv3-blue.svg" alt="License: GPL v3" /></a>
   <a href="https://github.com/GeiserX/audio-transcode-watcher/releases"><img src="https://img.shields.io/github/v/release/GeiserX/audio-transcode-watcher" alt="GitHub Release" /></a>
+  <a href="https://codecov.io/gh/GeiserX/audio-transcode-watcher"><img src="https://codecov.io/gh/GeiserX/audio-transcode-watcher/graph/badge.svg" alt="Codecov" /></a>
 </p>
 
 ---
