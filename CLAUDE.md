@@ -1,4 +1,4 @@
-# AGENTS.md — Audio Transcode Watcher
+# CLAUDE.md — Audio Transcode Watcher
 
 ## Project Overview
 
