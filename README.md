@@ -286,7 +286,7 @@ docker build -t audio-transcoder:dev .
 |---------|-------------|
 | [slskd-transform](https://github.com/GeiserX/slskd-transform) | Bulk upgrade your music library from lossy to lossless via Soulseek |
 | [telegram-slskd-local-bot](https://github.com/GeiserX/telegram-slskd-local-bot) | Automated music discovery and download via Telegram |
-| [jellyfin-encoder](https://github.com/GeiserX/jellyfin-encoder) | Automatic 720p HEVC/AV1 transcoding for Jellyfin |
+| [quality-gate-encoder](https://github.com/GeiserX/quality-gate-encoder) (formerly jellyfin-encoder) | Automatic 720p HEVC/AV1 transcoding for Jellyfin |
 
 
 ## License
