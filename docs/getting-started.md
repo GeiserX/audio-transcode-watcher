@@ -1,4 +1,4 @@
-# Installation
+# Getting started
 
 ## Docker Compose (Recommended)
 
@@ -29,7 +29,7 @@ outputs:
 ```yaml
 services:
   audio-transcoder:
-    image: drumsergio/audio-transcoder:0.5.1
+    image: drumsergio/audio-transcoder:0.5.2
     container_name: audio_transcoder
     environment:
       - TZ=Europe/Madrid
@@ -60,6 +60,6 @@ docker run -d \
   -v /path/to/flac:/music/flac:ro \
   -v /path/to/mp3:/music/mp3 \
   --restart unless-stopped \
-  drumsergio/audio-transcoder:0.5.1
+  drumsergio/audio-transcoder:0.5.2
 ```
 

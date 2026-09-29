@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/GeiserX/audio-transcode-watcher/main/docs/images/banner.svg" alt="audio-transcode-watcher banner" width="900" />
+  <img src="https://raw.githubusercontent.com/GeiserX/audio-transcode-watcher/main/docs/images/banner.svg" alt="audio-transcode-watcher" width="900" />
 </p>
 
 <p align="center">
@@ -9,11 +9,11 @@
 <p align="center">
   <a href="https://pypi.org/project/audio-transcode-watcher/"><img src="https://img.shields.io/pypi/v/audio-transcode-watcher?style=flat-square" alt="PyPI" /></a>
   <a href="https://github.com/GeiserX/audio-transcode-watcher/actions/workflows/tests.yml"><img src="https://github.com/GeiserX/audio-transcode-watcher/actions/workflows/tests.yml/badge.svg" alt="Tests" /></a>
+  <a href="https://github.com/GeiserX/audio-transcode-watcher/blob/main/LICENSE"><img src="https://img.shields.io/github/license/GeiserX/audio-transcode-watcher" alt="License" /></a>
   <a href="https://hub.docker.com/r/drumsergio/audio-transcoder"><img src="https://img.shields.io/docker/pulls/drumsergio/audio-transcoder" alt="Docker Pulls" /></a>
-  <a href="https://www.gnu.org/licenses/gpl-3.0"><img src="https://img.shields.io/badge/License-GPLv3-blue.svg" alt="License: GPL v3" /></a>
 </p>
 
-Perfect for maintaining a music library in multiple formats -- lossless for archival, lossy for portable devices -- without lifting a finger. Drop a FLAC into your source folder and get ALAC, MP3, AAC, and Opus copies instantly.
+Keep one library in several formats: lossless for the archive, lossy for phones and cars. Drop a FLAC into the source folder and the ALAC, MP3, AAC and Opus copies appear in their own trees.
 
 ## Features
 
@@ -28,30 +28,32 @@ Perfect for maintaining a music library in multiple formats -- lossless for arch
 
 ## Quick start
 
-Write a `config.yaml` with a source and your outputs ([full example](https://github.com/GeiserX/audio-transcode-watcher/blob/main/docs/configuration.md)), then:
-
 ```bash
+curl -fsSL -o config.yaml https://raw.githubusercontent.com/GeiserX/audio-transcode-watcher/main/config.example.yaml
 docker run -d --name audio_transcoder -e CONFIG_FILE=/app/config.yaml \
   -v ./config.yaml:/app/config.yaml:ro -v /path/to/flac:/music/flac:ro -v /path/to/mp3:/music/mp3 \
-  drumsergio/audio-transcoder:0.5.1
+  drumsergio/audio-transcoder:0.5.2
 ```
+
+Edit `config.yaml` first so its outputs match the folders you mount; the example writes ALAC, MP3 and AAC. [Getting started](https://github.com/GeiserX/audio-transcode-watcher/blob/main/docs/getting-started.md) has Docker Compose and the full `docker run`.
 
 ## Documentation
 
-- [Installation](https://github.com/GeiserX/audio-transcode-watcher/blob/main/docs/installation.md): Docker Compose and Docker CLI
+- [Getting started](https://github.com/GeiserX/audio-transcode-watcher/blob/main/docs/getting-started.md): Docker Compose and Docker CLI
 - [Configuration](https://github.com/GeiserX/audio-transcode-watcher/blob/main/docs/configuration.md): the full YAML example, supported codecs, `CONFIG_JSON`
-- [How it works](https://github.com/GeiserX/audio-transcode-watcher/blob/main/docs/how-it-works.md): sync and watch mode, folder mirroring, safety guards, performance, the verification tool
+- [Usage](https://github.com/GeiserX/audio-transcode-watcher/blob/main/docs/usage.md): what happens once it runs, and the verification tool
+- [How it works](https://github.com/GeiserX/audio-transcode-watcher/blob/main/docs/how-it-works.md): sync and watch mode, folder mirroring, safety guards, performance
 - [Development](https://github.com/GeiserX/audio-transcode-watcher/blob/main/docs/development.md): tests, building the image, contributing
 - [Roadmap](https://github.com/GeiserX/audio-transcode-watcher/blob/main/docs/ROADMAP.md)
 
-## Related Music Tools
+## Related projects
 
 | Project | Description |
 |---------|-------------|
 | [slskd-transform](https://github.com/GeiserX/slskd-transform) | Bulk upgrade your music library from lossy to lossless via Soulseek |
 | [telegram-slskd-local-bot](https://github.com/GeiserX/telegram-slskd-local-bot) | Automated music discovery and download via Telegram |
-| [quality-gate-encoder](https://github.com/GeiserX/quality-gate-encoder) (formerly jellyfin-encoder) | Automatic 720p HEVC/AV1 transcoding for Jellyfin |
+| [quality-gate-encoder](https://github.com/GeiserX/quality-gate-encoder) (formerly jellyfin-encoder) | Automatic 720p HEVC, H.264 or AV1 copies for Jellyfin |
 
 ## License
 
-GPL-3.0, see [LICENSE](https://github.com/GeiserX/audio-transcode-watcher/blob/main/LICENSE).
+[GPL-3.0-or-later](https://github.com/GeiserX/audio-transcode-watcher/blob/main/LICENSE)
