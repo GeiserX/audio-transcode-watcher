@@ -44,15 +44,4 @@ The service includes multiple guards to prevent data loss:
 - **Stability detection** -- Files are not processed until they have been stable on disk for a configurable period, avoiding partial reads during large copies or network transfers
 - **Low idle footprint** -- Uses inotify/FSEvents-based watching with minimal CPU usage when idle
 
-## Verification Tool
-
-A built-in verification tool checks that all outputs are in sync with the source:
-
-```bash
-# Basic sync check
-docker exec audio_transcoder python /app/tools/verify_sync.py --config /app/config.yaml
-
-# Thorough check including duration comparison
-docker exec audio_transcoder python /app/tools/verify_sync.py --config /app/config.yaml --check-duration -v
-```
-
+To check that every output matches the source, see [Usage](usage.md).
