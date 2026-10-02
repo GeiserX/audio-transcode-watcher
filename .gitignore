@@ -45,3 +45,4 @@ Thumbs.db
 # Local config (not the example)
 config.yaml
 !config.example.yaml
+!.beads/config.yaml
