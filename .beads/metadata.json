@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "audio_transcode_watcher",
+  "project_id": "6161f9c6-e633-44bd-b41e-c21d91f921d9"
+}
