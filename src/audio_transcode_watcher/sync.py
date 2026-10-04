@@ -14,10 +14,12 @@ from pathlib import Path
 from . import manifest
 from .config import Config, OutputConfig
 from .encoder import (
+    DECODE_ERROR_RC,
     atomic_ffmpeg_encode,
     build_ffmpeg_command,
     copy_mp4_tags,
     portable_limit_args,
+    tolerant_command,
 )
 from .lyrics import fetch_lyrics_for_file
 from .utils import (
@@ -371,18 +373,36 @@ def _process_outputs(source_path: str, config: Config, force: bool) -> bool:
 
         cmd = build_ffmpeg_command(source_path, out_path, output)
         rc = atomic_ffmpeg_encode(cmd, out_path, finalize=finalize)
-        if rc == 0:
-            kind = "encode" if is_lossless(source_path) else "transcode"
-            manifest.record(
-                output.path, out_path, config.source_path, source_path, kind
-            )
-        else:
+        kind = "encode" if is_lossless(source_path) else "transcode"
+        if rc != 0:
             logger.error(
                 "%s encode failed for %s",
                 output.name.upper(),
                 source_path,
             )
+            # Remembered even if the tolerant run below succeeds, so the
+            # strict attempt is not repeated on every scan.
             ok = False
+            if (
+                rc == DECODE_ERROR_RC
+                and config.corrupt_source_for(output) == "encode_anyway"
+            ):
+                rc = atomic_ffmpeg_encode(
+                    tolerant_command(cmd), out_path, finalize=finalize, strict=False
+                )
+                if rc == 0:
+                    kind = "tolerant"
+                    logger.warning(
+                        "%s copy %s was made from a damaged source %s; "
+                        "it may glitch where the source is corrupt",
+                        output.name.upper(),
+                        out_path,
+                        source_path,
+                    )
+        if rc == 0:
+            manifest.record(
+                output.path, out_path, config.source_path, source_path, kind
+            )
     return ok
 
 

@@ -275,8 +275,31 @@ def _is_artwork_error(stderr: str) -> bool:
     return any(h in low for h in _ARTWORK_ERROR_HINTS)
 
 
-def _run_ffmpeg(cmd: list[str]) -> tuple[int, str]:
-    """Run ffmpeg; a decode error on stderr counts as a failure even with rc 0."""
+def tolerant_command(cmd: list[str]) -> list[str]:
+    """*cmd* without -xerror and -err_detect, so ffmpeg conceals decode errors."""
+    out: list[str] = []
+    skip = False
+    for i, arg in enumerate(cmd):
+        if skip:
+            skip = False
+            continue
+        if arg == "-xerror":
+            continue
+        if arg == "-err_detect" and i + 1 < len(cmd):
+            skip = True
+            continue
+        out.append(arg)
+    return out
+
+
+def _run_ffmpeg(cmd: list[str], strict: bool = True) -> tuple[int, str]:
+    """
+    Run ffmpeg and return (rc, stderr).
+
+    Strict: a decode error on stderr is a failure even with rc 0, and any
+    failure that reports a decode error returns DECODE_ERROR_RC. Not strict:
+    only the exit code counts (concealed errors still print to stderr).
+    """
     try:
         proc = subprocess.run(
             cmd, capture_output=True, timeout=FFMPEG_TIMEOUT, check=False
@@ -285,7 +308,7 @@ def _run_ffmpeg(cmd: list[str]) -> tuple[int, str]:
         return TIMEOUT_RC, f"ffmpeg timed out after {FFMPEG_TIMEOUT} s"
     stderr = proc.stderr.decode("utf-8", errors="ignore") if proc.stderr else ""
     rc = proc.returncode
-    if rc == 0 and _decode_error(stderr):
+    if strict and _decode_error(stderr):
         rc = DECODE_ERROR_RC
     return rc, stderr
 
@@ -295,6 +318,7 @@ def atomic_ffmpeg_encode(
     final_dest: str,
     retry_without_artwork: bool = True,
     finalize: Callable[[str], None] | None = None,
+    strict: bool = True,
 ) -> int:
     """
     Run FFmpeg with atomic output (write to temp, then rename).
@@ -306,9 +330,12 @@ def atomic_ffmpeg_encode(
             failure points at the attached picture stream
         finalize: Optional callable run on the finished temp file before
             the rename (used to copy extra tags)
+        strict: If True, a decode error reported on stderr fails the encode
+            and the result is DECODE_ERROR_RC. False for the tolerant retry.
 
     Returns:
-        Return code (0 for success). No output is written on failure.
+        Return code (0 for success, DECODE_ERROR_RC when the source did not
+        decode cleanly). No output is written on failure.
     """
     final_dest = nfc_path(final_dest)
     dest_dir = os.path.dirname(final_dest)
@@ -329,7 +356,7 @@ def atomic_ffmpeg_encode(
     source = _source_from_cmd(cmd)
 
     logger.info("► %s", " ".join(cmd))
-    rc, stderr = _run_ffmpeg(cmd)
+    rc, stderr = _run_ffmpeg(cmd, strict)
 
     if rc != 0 and retry_without_artwork and _is_artwork_error(stderr):
         _cleanup_temp(tmp_dest)
@@ -337,7 +364,7 @@ def atomic_ffmpeg_encode(
         cmd = _remove_artwork_from_command(cmd)
         cmd[-1] = tmp_dest
         logger.info("► (retry) %s", " ".join(cmd))
-        rc, stderr = _run_ffmpeg(cmd)
+        rc, stderr = _run_ffmpeg(cmd, strict)
 
     if rc != 0:
         detail = _decode_error(stderr) or (stderr.strip().splitlines() or [""])[-1]

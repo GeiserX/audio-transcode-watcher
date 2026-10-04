@@ -45,8 +45,17 @@ DEFAULT_BITRATES = {
 # Portable-playback limits applied when an output does not set them.
 # AAC goes to phones, AirPods and CarPlay: stereo, at most 48 kHz.
 # Any codec can opt in by setting channels / max_sample_rate; 0 = no limit.
+# What to do with a source that does not decode cleanly: "skip" writes
+# nothing; "encode_anyway" retries with ffmpeg's error concealment.
+CORRUPT_SOURCE_MODES = ("skip", "encode_anyway")
+
 DEFAULT_CHANNELS = {"aac": 2}
 DEFAULT_MAX_SAMPLE_RATE = {"aac": 48000}
+
+
+def _check_corrupt_source(value: Any, label: str) -> None:
+    if value not in CORRUPT_SOURCE_MODES:
+        raise ValueError(f"{label} must be one of {', '.join(CORRUPT_SOURCE_MODES)}")
 
 
 @dataclass
@@ -60,6 +69,7 @@ class OutputConfig:
     include_artwork: bool = True
     channels: int | None = None  # Downmix above this many channels; 0 = keep
     max_sample_rate: int | None = None  # Resample above this rate (Hz); 0 = keep
+    corrupt_source: str | None = None  # "skip" | "encode_anyway"; None = global
 
     def __post_init__(self) -> None:
         """Validate and set defaults after initialization."""
@@ -83,6 +93,10 @@ class OutputConfig:
             self.channels = DEFAULT_CHANNELS.get(self.codec, 0)
         if self.max_sample_rate is None:
             self.max_sample_rate = DEFAULT_MAX_SAMPLE_RATE.get(self.codec, 0)
+        if self.corrupt_source is not None:
+            _check_corrupt_source(
+                self.corrupt_source, f"Output '{self.name}': corrupt_source"
+            )
         for key in ("channels", "max_sample_rate"):
             value = getattr(self, key)
             if isinstance(value, bool) or not isinstance(value, int) or value < 0:
@@ -111,6 +125,7 @@ class OutputConfig:
             include_artwork=data.get("include_artwork", True),
             channels=data.get("channels"),
             max_sample_rate=data.get("max_sample_rate"),
+            corrupt_source=data.get("corrupt_source"),
         )
 
 
@@ -127,11 +142,14 @@ class Config:
     min_stable_seconds: float = 1.0
     fetch_lyrics: bool = True  # Auto-fetch .lrc lyrics via syncedlyrics
     sync_interval_seconds: int = 300  # Seconds between periodic full syncs
+    corrupt_source: str = "skip"  # Default for outputs that don't set it
 
     def __post_init__(self) -> None:
         """Validate configuration after initialization."""
         if not self.source_path:
             raise ValueError("source_path is required")
+
+        _check_corrupt_source(self.corrupt_source, "settings.corrupt_source")
 
         interval = self.sync_interval_seconds
         if (
@@ -159,6 +177,10 @@ class Config:
         """Get list of all output directory paths."""
         return [o.path for o in self.outputs]
 
+    def corrupt_source_for(self, output: OutputConfig) -> str:
+        """The corrupt_source mode for *output*: its own, else the global one."""
+        return output.corrupt_source or self.corrupt_source
+
     def get_output_by_name(self, name: str) -> OutputConfig | None:
         """Get an output configuration by name."""
         for output in self.outputs:
@@ -183,6 +205,7 @@ class Config:
             min_stable_seconds=settings.get("min_stable_seconds", 1.0),
             fetch_lyrics=settings.get("fetch_lyrics", True),
             sync_interval_seconds=settings.get("sync_interval_seconds", 300),
+            corrupt_source=settings.get("corrupt_source", "skip"),
         )
 
     @classmethod

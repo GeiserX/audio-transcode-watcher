@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [0.6.2] - 2026-10-05
+
+### Added
+
+- `corrupt_source: skip | encode_anyway`, under `settings` or on one output (default `skip`, the 0.6.1 behaviour). Some damaged FLACs have no clean copy to replace them, and refusing them leaves the phone with no copy of the song at all. With `encode_anyway`, a source that fails the strict decode still gets the same ERROR line, then one more encode without `-xerror` and `-err_detect`, so FFmpeg conceals the damaged frames. That copy is logged with one WARNING saying it was made from a damaged source, and its manifest row has kind `tolerant`. The source is still remembered as failed, so the strict attempt is not repeated on every scan, and a source that fails even the tolerant encode stays refused.
+
 ## [0.6.1] - 2026-10-04
 
 ### Added
@@ -53,5 +59,6 @@ All notable changes to this project are documented here. The format follows [Kee
 - Lossy copies are written through a temp file and renamed, like encodes, so a half-written copy is never visible.
 - `force_reencode: true` purges the outputs once at startup. It used to purge them again on every periodic sync, which re-encoded the whole library every five minutes.
 
+[0.6.2]: https://github.com/GeiserX/audio-transcode-watcher/releases/tag/v0.6.2
 [0.6.1]: https://github.com/GeiserX/audio-transcode-watcher/releases/tag/v0.6.1
 [0.6.0]: https://github.com/GeiserX/audio-transcode-watcher/releases/tag/v0.6.0

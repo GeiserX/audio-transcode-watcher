@@ -1,6 +1,6 @@
 # Roadmap
 
-Current version: **0.6.1**
+Current version: **0.6.2**
 
 ## Completed
 
@@ -13,6 +13,7 @@ Current version: **0.6.1**
 - **Recursive directory support** -- mirror source folder hierarchy in outputs (v0.5.0)
 - **Lossy sources copied, not inflated**, corrupt sources fail loudly, ReplayGain and MusicBrainz tags kept in M4A outputs, configurable periodic sync (v0.6.0)
 - **Portable AAC**: stereo downmix and a 48 kHz cap for AAC outputs, per-output `channels` and `max_sample_rate` (v0.6.1)
+- **Damaged sources**: `corrupt_source: encode_anyway` makes a concealed copy instead of none (v0.6.2)
 
 ## v0.7.0 -- Quality of Life
 
