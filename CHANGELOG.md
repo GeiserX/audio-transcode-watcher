@@ -31,5 +31,6 @@ All notable changes to this project are documented here. The format follows [Kee
 - Lyrics: when the providers return nothing, nothing is written. Results made of one repeated token, with fewer than 4 timed lines, or with only an advertisement line are rejected, and the reason is logged.
 - Deleting one of two sources that share a name (for example the MP3 next to a FLAC) no longer deletes the `.lrc` copies the other one still needs.
 - Lossy copies are written through a temp file and renamed, like encodes, so a half-written copy is never visible.
+- `force_reencode: true` purges the outputs once at startup. It used to purge them again on every periodic sync, which re-encoded the whole library every five minutes.
 
 [0.6.0]: https://github.com/GeiserX/audio-transcode-watcher/releases/tag/v0.6.0
