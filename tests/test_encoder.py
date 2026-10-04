@@ -724,3 +724,16 @@ class TestEncoderEdges:
     @patch("audio_transcode_watcher.encoder.mutagen.File", return_value=None)
     def test_unreadable_source_copies_no_tags(self, _file, tmp_path):
         assert copy_mp4_tags(str(tmp_path / "x.flac"), str(tmp_path / "x.m4a")) == 0
+
+
+class TestFfmpegTimeout:
+    def test_hung_ffmpeg_fails_and_writes_nothing(self, tmp_path, caplog):
+        cmd, dest = _alac_cmd(tmp_path)
+        with patch(
+            "subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="ffmpeg", timeout=1800)
+        ) as run:
+            rc = atomic_ffmpeg_encode(cmd, dest)
+        assert rc == 124
+        assert run.call_args.kwargs["timeout"] == 1800
+        assert not os.path.exists(dest)
+        assert "timed out" in caplog.text

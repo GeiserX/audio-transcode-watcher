@@ -25,6 +25,7 @@ All notable changes to this project are documented here. The format follows [Kee
 ### Fixed
 
 - A source that does not decode cleanly now fails instead of producing a short copy. FFmpeg runs with `-xerror`, and a decode error on its stderr counts as a failure even when it exits 0. A corrupt FLAC used to come out two seconds short with nothing in the logs. Now the error is logged with the file name, no output is written, and the file is not tried again until its modification time changes.
+- An ffmpeg run that takes longer than 30 minutes is killed and counts as a failure, so one hung encode can no longer stall every later sync.
 - The retry without cover art only runs when the error is about the picture stream. It used to run on any error that mentioned "decode".
 - The periodic sync could delete an output the watcher had just written, because it judged orphans from a source list built before the file arrived. The orphan pass now reads the source folder again, and it leaves alone any file younger than 120 seconds or whose source is being processed.
 - Startup and periodic cleanup no longer delete `.tmp__ff` files younger than 10 minutes, which could belong to an encode still running.

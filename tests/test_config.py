@@ -273,3 +273,13 @@ class TestDeprecatedWhisperSettings:
         with caplog.at_level(logging.WARNING, logger="audio_transcode_watcher.config"):
             Config.from_dict(_settings_config({"fetch_lyrics": True}))
         assert not caplog.records
+
+
+class TestSyncIntervalTypes:
+    @pytest.mark.parametrize("bad", ["300", True, None, -5])
+    def test_rejects_non_numbers_with_value_error(self, bad):
+        with pytest.raises(ValueError, match="sync_interval_seconds"):
+            Config.from_dict(_settings_config({"sync_interval_seconds": bad}))
+
+    def test_accepts_float(self):
+        assert Config.from_dict(_settings_config({"sync_interval_seconds": 90.5})).sync_interval_seconds == 90.5

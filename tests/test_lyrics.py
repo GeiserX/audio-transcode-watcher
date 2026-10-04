@@ -266,3 +266,20 @@ class TestLrcModeFailure:
             assert _write_lrc(lrc_path, GOOD_LRC, "l", "s", owner_of=str(audio)) == lrc_path
         msgs = [r for r in caplog.records if "Could not chmod" in r.getMessage()]
         assert msgs and msgs[0].levelno == logging.DEBUG
+
+
+class TestBareDomainAds:
+    @patch("audio_transcode_watcher.lyrics.syncedlyrics")
+    @patch("audio_transcode_watcher.lyrics.extract_metadata")
+    def test_four_bare_domain_lines_are_rejected(self, mock_meta, mock_sl, tmp_path):
+        audio = tmp_path / "Band - Song.flac"
+        audio.touch()
+        mock_meta.return_value = ("Band", "Song")
+        mock_sl.search.return_value = (
+            "[00:01.00] lyricsite.co\n"
+            "[00:02.00] get-the-app.xyz\n"
+            "[00:03.00] songs.example.club\n"
+            "[00:04.00] more.lyrics.info\n"
+        )
+        assert fetch_lyrics_for_file(str(audio)) is None
+        assert list(tmp_path.glob("*.lrc")) == []

@@ -16,7 +16,8 @@ logger = logging.getLogger(__name__)
 
 # A synced line: one or more [mm:ss.xx] stamps, then the text.
 _TIMED_LINE = re.compile(r"^\s*(?:\[\d{1,3}:\d{1,2}(?:[.:]\d{1,3})?\])+(.*)$")
-_URL = re.compile(r"(https?://|www\.)\S+|\b\S+\.(com|net|org|io|me|ru|cn)\b", re.IGNORECASE)
+# A URL or a bare domain (``site.co``, ``lyrics.example.xyz``).
+_URL = re.compile(r"(https?://|www\.)\S+|\b[\w-]+(\.[\w-]+)*\.[a-z]{2,24}\b", re.IGNORECASE)
 _TOKEN = re.compile(r"\w+|[^\w\s]+")
 
 # Fewer timed lines than this is not a usable synced lyric.

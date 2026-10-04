@@ -19,6 +19,11 @@ logger = logging.getLogger(__name__)
 # Exit code returned when ffmpeg exits 0 but reported a decode error.
 DECODE_ERROR_RC = 69
 
+# A single encode that runs longer than this (seconds) is killed and counts
+# as a failure, so a hung ffmpeg cannot stall the sync for good.
+FFMPEG_TIMEOUT = 1800
+TIMEOUT_RC = 124
+
 # stderr text that means the audio did not decode cleanly, even when
 # ffmpeg exits 0 (a corrupt FLAC used to come out seconds short).
 _DECODE_ERROR_HINTS = ("decode_frame() failed", "invalid", "error while decoding")
@@ -208,7 +213,10 @@ def _is_artwork_error(stderr: str) -> bool:
 
 def _run_ffmpeg(cmd: list[str]) -> tuple[int, str]:
     """Run ffmpeg; a decode error on stderr counts as a failure even with rc 0."""
-    proc = subprocess.run(cmd, capture_output=True)
+    try:
+        proc = subprocess.run(cmd, capture_output=True, timeout=FFMPEG_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        return TIMEOUT_RC, f"ffmpeg timed out after {FFMPEG_TIMEOUT} s"
     stderr = proc.stderr.decode("utf-8", errors="ignore") if proc.stderr else ""
     rc = proc.returncode
     if rc == 0 and _decode_error(stderr):

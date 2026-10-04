@@ -112,8 +112,9 @@ class Config:
         if not self.source_path:
             raise ValueError("source_path is required")
 
-        if self.sync_interval_seconds <= 0:
-            raise ValueError("sync_interval_seconds must be greater than 0")
+        interval = self.sync_interval_seconds
+        if isinstance(interval, bool) or not isinstance(interval, (int, float)) or interval <= 0:
+            raise ValueError("sync_interval_seconds must be a number greater than 0")
         
         if not self.outputs:
             raise ValueError("At least one output is required")
