@@ -30,6 +30,9 @@ dependencies = [
     "pyyaml>=6.0",
     "mutagen>=1.47.0",
     "syncedlyrics>=1.0.0",
+    # Transitive via syncedlyrics/requests; pinned up for GHSA-vxq7-64xx-v4gw,
+    # GHSA-8988-9cw3-xx77 and GHSA-gh4c-6fx4-qh6g.
+    "urllib3>=2.8.0",
 ]
 
 [project.optional-dependencies]

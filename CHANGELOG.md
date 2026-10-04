@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [0.6.1] - 2026-10-04
+
+### Security
+
+- `urllib3` is now required at 2.8.0 or newer, for GHSA-vxq7-64xx-v4gw, GHSA-8988-9cw3-xx77 and GHSA-gh4c-6fx4-qh6g. It comes in through syncedlyrics and requests; the image installs from `pyproject.toml`, so the floor is declared there and `uv.lock` resolves 2.8.0.
+
 ## [0.6.0] - 2026-10-04
 
 ### Changed
@@ -35,4 +41,5 @@ All notable changes to this project are documented here. The format follows [Kee
 - Lossy copies are written through a temp file and renamed, like encodes, so a half-written copy is never visible.
 - `force_reencode: true` purges the outputs once at startup. It used to purge them again on every periodic sync, which re-encoded the whole library every five minutes.
 
+[0.6.1]: https://github.com/GeiserX/audio-transcode-watcher/releases/tag/v0.6.1
 [0.6.0]: https://github.com/GeiserX/audio-transcode-watcher/releases/tag/v0.6.0
