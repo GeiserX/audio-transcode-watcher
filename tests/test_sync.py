@@ -10,6 +10,7 @@ import pytest
 import audio_transcode_watcher.sync as sync_mod
 from audio_transcode_watcher import manifest
 from audio_transcode_watcher.config import Config, OutputConfig
+from audio_transcode_watcher.encoder import DECODE_ERROR_RC
 from audio_transcode_watcher.sync import (
     _cleanup_orphans,
     _has_lossless_source,
@@ -2075,3 +2076,267 @@ class TestLimitsAndProvenanceEdges:
 
         enc.assert_not_called()
         assert (mp3 / "X.mp3").read_bytes() == b"edited by hand, longer"
+
+
+@pytest.mark.usefixtures("fresh_manifests")
+class TestCorruptSourceModes:
+    """corrupt_source: skip refuses a damaged source; encode_anyway conceals."""
+
+    def _config(self, source, out, mode, per_output=None):
+        return Config(
+            source_path=str(source),
+            outputs=[
+                OutputConfig(
+                    name="aac", codec="aac", path=str(out), corrupt_source=per_output
+                )
+            ],
+            fetch_lyrics=False,
+            corrupt_source=mode,
+        )
+
+    @staticmethod
+    def _strict_fails_tolerant_works(calls):
+        def encode(cmd, dest, strict=True, **_kwargs):
+            calls.append((list(cmd), strict))
+            if strict:
+                return DECODE_ERROR_RC
+            Path(dest).write_bytes(b"concealed")
+            return 0
+
+        return encode
+
+    @patch("audio_transcode_watcher.sync.safety_guard_active", return_value=False)
+    def test_skip_writes_nothing_and_remembers(self, _guard, temp_dir):
+        source, out = _dirs(temp_dir, "source", "aac")
+        flac = source / "Radiohead - High and Dry.flac"
+        flac.write_bytes(b"flac")
+        calls = []
+        with patch(
+            "audio_transcode_watcher.sync.atomic_ffmpeg_encode",
+            side_effect=self._strict_fails_tolerant_works(calls),
+        ):
+            process_source_file(
+                str(flac), self._config(source, out, "skip"), check_stable=False
+            )
+        assert [strict for _cmd, strict in calls] == [True]
+        assert _visible(out) == []
+        assert str(flac) in sync_mod._failed_sources
+
+    @pytest.mark.parametrize(
+        "glob,per_output", [("encode_anyway", None), ("skip", "encode_anyway")]
+    )
+    @patch("audio_transcode_watcher.sync.safety_guard_active", return_value=False)
+    def test_encode_anyway_makes_a_tolerant_copy(
+        self, _guard, temp_dir, caplog, glob, per_output
+    ):
+        source, out = _dirs(temp_dir, "source", "aac")
+        flac = source / "Radiohead - High and Dry.flac"
+        flac.write_bytes(b"flac")
+        config = self._config(source, out, glob, per_output)
+        calls = []
+        with patch(
+            "audio_transcode_watcher.sync.atomic_ffmpeg_encode",
+            side_effect=self._strict_fails_tolerant_works(calls),
+        ):
+            process_source_file(str(flac), config, check_stable=False)
+
+        # One strict run, then exactly one tolerant run without the strict flags.
+        assert [strict for _cmd, strict in calls] == [True, False]
+        strict_cmd, tolerant_cmd = calls[0][0], calls[1][0]
+        assert "-xerror" in strict_cmd and "-err_detect" in strict_cmd
+        assert "-xerror" not in tolerant_cmd and "-err_detect" not in tolerant_cmd
+        dest = out / "Radiohead - High and Dry.m4a"
+        assert dest.read_bytes() == b"concealed"
+        assert manifest.lookup(str(out), str(dest))["kind"] == "tolerant"
+
+        errors = [r for r in caplog.records if r.levelname == "ERROR"]
+        warnings = [
+            r
+            for r in caplog.records
+            if r.levelname == "WARNING" and "damaged source" in r.getMessage()
+        ]
+        assert any("encode failed" in r.getMessage() for r in errors)
+        assert len(warnings) == 1
+
+        # The source is remembered: the next scan does not retry it at all.
+        assert str(flac) in sync_mod._failed_sources
+        calls.clear()
+        dest.unlink()
+        with patch(
+            "audio_transcode_watcher.sync.atomic_ffmpeg_encode",
+            side_effect=self._strict_fails_tolerant_works(calls),
+        ):
+            process_source_file(str(flac), config, check_stable=False)
+        assert calls == []
+
+    @patch("audio_transcode_watcher.sync.safety_guard_active", return_value=False)
+    def test_source_failing_the_tolerant_run_stays_refused(
+        self, _guard, temp_dir, caplog
+    ):
+        source, out = _dirs(temp_dir, "source", "aac")
+        flac = source / "X.flac"
+        flac.write_bytes(b"flac")
+        calls = []
+
+        def encode(cmd, dest, strict=True, **_kwargs):
+            calls.append(strict)
+            return DECODE_ERROR_RC if strict else 1
+
+        with patch(
+            "audio_transcode_watcher.sync.atomic_ffmpeg_encode", side_effect=encode
+        ):
+            process_source_file(
+                str(flac),
+                self._config(source, out, "encode_anyway"),
+                check_stable=False,
+            )
+        assert calls == [True, False]
+        assert _visible(out) == []
+        assert str(flac) in sync_mod._failed_sources
+        assert "damaged source" not in caplog.text
+
+    @patch("audio_transcode_watcher.sync.safety_guard_active", return_value=False)
+    def test_other_failures_get_no_tolerant_run(self, _guard, temp_dir):
+        source, out = _dirs(temp_dir, "source", "aac")
+        flac = source / "X.flac"
+        flac.write_bytes(b"flac")
+        calls = []
+
+        def encode(cmd, dest, strict=True, **_kwargs):
+            calls.append(strict)
+            return 124  # timed out, not a decode error
+
+        with patch(
+            "audio_transcode_watcher.sync.atomic_ffmpeg_encode", side_effect=encode
+        ):
+            process_source_file(
+                str(flac),
+                self._config(source, out, "encode_anyway"),
+                check_stable=False,
+            )
+        assert calls == [True]
+
+
+@pytest.mark.skipif(
+    __import__("shutil").which("ffmpeg") is None,
+    reason="ffmpeg is not installed; the real-file checks need it",
+)
+@pytest.mark.usefixtures("fresh_manifests")
+class TestCorruptSourceRealFile:
+    def test_damaged_flac_gets_a_tolerant_aac(self, temp_dir):
+        import subprocess
+
+        source, out = _dirs(temp_dir, "source", "aac")
+        good = source / "good.tmp.flac"
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:duration=5",
+                "-c:a",
+                "flac",
+                str(good),
+            ],
+            check=True,
+        )
+        data = bytearray(good.read_bytes())
+        good.unlink()
+        for i in range(len(data) // 3, len(data) // 3 + 400):
+            data[i] ^= 0x5A
+        bad = source / "Scott McKenzie - San Francisco.flac"
+        bad.write_bytes(bytes(data))
+        config = Config(
+            source_path=str(source),
+            outputs=[OutputConfig(name="aac", codec="aac", path=str(out))],
+            fetch_lyrics=False,
+            corrupt_source="encode_anyway",
+        )
+
+        process_source_file(str(bad), config, check_stable=False)
+
+        dest = out / "Scott McKenzie - San Francisco.m4a"
+        assert dest.exists() and dest.stat().st_size > 0
+        assert manifest.lookup(str(out), str(dest))["kind"] == "tolerant"
+        assert str(bad) in sync_mod._failed_sources
+
+
+@pytest.mark.usefixtures("fresh_manifests")
+class TestTolerantCopyReplacedByCleanSource:
+    """A clean replacement of a damaged source gets a strict encode on a plain scan."""
+
+    @patch("audio_transcode_watcher.sync.safety_guard_active", return_value=False)
+    def test_clean_replacement_rebuilds_the_tolerant_copy(self, _guard, temp_dir):
+        source, out = _dirs(temp_dir, "source", "aac")
+        flac = source / "Radiohead - High and Dry.flac"
+        flac.write_bytes(b"damaged flac")
+        config = Config(
+            source_path=str(source),
+            outputs=[OutputConfig(name="aac", codec="aac", path=str(out))],
+            fetch_lyrics=False,
+            corrupt_source="encode_anyway",
+        )
+        dest = out / "Radiohead - High and Dry.m4a"
+
+        def damaged(cmd, d, strict=True, **_kwargs):
+            if strict:
+                return DECODE_ERROR_RC
+            Path(d).write_bytes(b"concealed")
+            return 0
+
+        with patch(
+            "audio_transcode_watcher.sync.atomic_ffmpeg_encode", side_effect=damaged
+        ):
+            process_source_file(str(flac), config, check_stable=False)
+        assert dest.read_bytes() == b"concealed"
+
+        # Unchanged source: the tolerant copy is left alone on later scans.
+        sync_mod._failed_sources.clear()
+        with patch("audio_transcode_watcher.sync.atomic_ffmpeg_encode") as enc:
+            process_source_file(str(flac), config, check_stable=False)
+        enc.assert_not_called()
+
+        # The clean copy arrives (new size and mtime): strict encode replaces it.
+        flac.write_bytes(b"clean flac, a different size")
+        later = flac.stat().st_mtime + 10
+        os.utime(flac, (later, later))
+        calls = []
+
+        def clean(cmd, d, strict=True, **_kwargs):
+            calls.append(strict)
+            Path(d).write_bytes(b"clean encode")
+            return 0
+
+        with patch(
+            "audio_transcode_watcher.sync.atomic_ffmpeg_encode", side_effect=clean
+        ):
+            process_source_file(str(flac), config, force=False, check_stable=False)
+        assert calls == [True]
+        assert dest.read_bytes() == b"clean encode"
+        assert manifest.lookup(str(out), str(dest))["kind"] == "encode"
+
+    @patch("audio_transcode_watcher.sync.atomic_ffmpeg_encode")
+    @patch("audio_transcode_watcher.sync.safety_guard_active", return_value=False)
+    def test_only_tolerant_rows_are_rebuilt_on_a_plain_scan(
+        self, _guard, mock_encode, temp_dir
+    ):
+        source, out = _dirs(temp_dir, "source", "aac")
+        flac = source / "X.flac"
+        flac.write_bytes(b"flac")
+        dest = out / "X.m4a"
+        dest.write_bytes(b"strict encode")
+        manifest.record(str(out), str(dest), str(source), str(flac), "encode")
+        flac.write_bytes(b"flac with edited tags")  # source changed after the encode
+        config = Config(
+            source_path=str(source),
+            outputs=[OutputConfig(name="aac", codec="aac", path=str(out))],
+            fetch_lyrics=False,
+        )
+
+        process_source_file(str(flac), config, force=False, check_stable=False)
+
+        mock_encode.assert_not_called()

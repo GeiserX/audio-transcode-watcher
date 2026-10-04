@@ -13,6 +13,7 @@ import pytest
 
 from audio_transcode_watcher.config import OutputConfig
 from audio_transcode_watcher.encoder import (
+    DECODE_ERROR_RC,
     MP4_TAG_ATOMS,
     _cleanup_temp,
     _remove_artwork_from_command,
@@ -21,6 +22,7 @@ from audio_transcode_watcher.encoder import (
     copy_mp4_tags,
     limit_args,
     target_sample_rate,
+    tolerant_command,
 )
 
 
@@ -996,3 +998,42 @@ class TestPortableAacRealFiles:
         assert self._encode(
             src, OutputConfig(name="alac", codec="alac", path="/x"), tmp_path
         ) == (96000, 6)
+
+
+class TestTolerantRun:
+    """The relaxed encode used for corrupt_source: encode_anyway."""
+
+    def test_tolerant_command_drops_only_the_strict_flags(self, tmp_path):
+        cmd, _dest = _alac_cmd(tmp_path)
+        relaxed = tolerant_command(cmd)
+        assert "-xerror" not in relaxed and "-err_detect" not in relaxed
+        assert "crccheck+explode" not in relaxed
+        assert [
+            a for a in cmd if a not in ("-xerror", "-err_detect", "crccheck+explode")
+        ] == relaxed
+
+    def test_strict_failure_with_decode_error_reports_decode_rc(
+        self, fake_ffmpeg, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("FAKE_RC", "183")
+        monkeypatch.setenv("FAKE_STDERR", CORRUPT_FLAC_STDERR)
+        cmd, dest = _alac_cmd(tmp_path)
+        assert atomic_ffmpeg_encode(cmd, dest) == DECODE_ERROR_RC
+
+    def test_non_strict_run_ignores_concealed_errors(
+        self, fake_ffmpeg, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("FAKE_RC", "0")
+        monkeypatch.setenv("FAKE_STDERR", CORRUPT_FLAC_STDERR)
+        cmd, dest = _alac_cmd(tmp_path)
+        assert atomic_ffmpeg_encode(tolerant_command(cmd), dest, strict=False) == 0
+        assert os.path.isfile(dest)
+
+    def test_non_strict_run_still_fails_on_exit_code(
+        self, fake_ffmpeg, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("FAKE_RC", "1")
+        monkeypatch.setenv("FAKE_STDERR", CORRUPT_FLAC_STDERR)
+        cmd, dest = _alac_cmd(tmp_path)
+        assert atomic_ffmpeg_encode(tolerant_command(cmd), dest, strict=False) == 1
+        assert not os.path.exists(dest)

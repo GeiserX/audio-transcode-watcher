@@ -1,4 +1,4 @@
-# Audio Transcode Watcher Configuration (0.6.1)
+# Audio Transcode Watcher Configuration (0.6.2)
 # ======================================
 #
 # This configuration file defines the source folder and output destinations
@@ -61,6 +61,13 @@ settings:
 
   # Seconds between periodic full syncs (default: 300)
   sync_interval_seconds: 300
+
+  # A source that does not decode cleanly (a damaged FLAC):
+  #   skip           write nothing for it (default)
+  #   encode_anyway  log the error, then encode it with FFmpeg's error
+  #                  concealment, so a one-frame glitch is better than no copy
+  # An output can set its own corrupt_source to override this.
+  corrupt_source: skip
 
   # whisper_fallback and whisper_model were removed in 0.6.0 and are ignored
 

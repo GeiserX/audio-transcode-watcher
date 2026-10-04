@@ -17,7 +17,7 @@ Each output folder holds `.atw-manifest.json`, a map from each output file to th
 
 ## Corrupt sources
 
-FFmpeg runs with `-xerror` and `-err_detect crccheck+explode`, so a frame whose checksum does not match stops the encode. If a source does not decode cleanly, the encode fails even when FFmpeg exits 0 but printed a decode error. The error is logged with the file name and no output is written. The file is not tried again until its modification time changes, or the service restarts.
+FFmpeg runs with `-xerror` and `-err_detect crccheck+explode`, so a frame whose checksum does not match stops the encode. If a source does not decode cleanly, the encode fails even when FFmpeg exits 0 but printed a decode error. The error is logged with the file name and no output is written, unless `corrupt_source: encode_anyway` is set; then the file is encoded once more with FFmpeg's error concealment and marked `tolerant` in the manifest (see [Damaged sources](configuration.md#damaged-sources)). The strict attempt is not repeated until the file's modification time changes, or the service restarts.
 
 ## Recursive Directory Support
 

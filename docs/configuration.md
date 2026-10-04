@@ -60,7 +60,29 @@ settings:
 
   # Seconds between periodic full syncs (default: 300)
   sync_interval_seconds: 300
+
+  # What to do with a source that does not decode cleanly: skip | encode_anyway
+  # (default: skip). An output can set its own corrupt_source.
+  corrupt_source: skip
 ```
+
+### Damaged sources
+
+A source that fails the strict decode (see [Corrupt sources](how-it-works.md#corrupt-sources)) is handled by `corrupt_source`:
+
+- `skip` (the default) writes nothing for it.
+- `encode_anyway` logs the same ERROR, then encodes it once more without `-xerror` and `-err_detect`, letting FFmpeg conceal the damaged frames. The copy exists, one WARNING line says it was made from a damaged source, and its manifest row has kind `tolerant`. A source that fails even that run stays refused.
+
+Set it under `settings` for every output, or on one output to override, for example only on the AAC output that a phone plays from:
+
+```yaml
+  - name: aac-256
+    codec: aac
+    path: /music/aac
+    corrupt_source: encode_anyway
+```
+
+Either way the source is remembered as failed, so the strict attempt is not repeated on every scan. Replacing the file with a clean copy (a new size or modification time) clears that, and the next scan rebuilds the tolerant copy with the strict encode.
 
 `whisper_fallback` and `whisper_model` were removed in 0.6.0 along with the Whisper lyrics fallback. A config that still sets them loads, and the first load logs one warning that they are ignored.
 

@@ -338,3 +338,39 @@ class TestPortableLimits:
             OutputConfig.from_dict(
                 {"name": "aac", "codec": "aac", "path": "/a", key: bad}
             )
+
+
+class TestCorruptSourceSetting:
+    def test_defaults_to_skip(self):
+        cfg = Config.from_dict(_settings_config({}))
+        assert cfg.corrupt_source == "skip"
+        assert cfg.corrupt_source_for(cfg.outputs[0]) == "skip"
+
+    def test_global_setting(self):
+        cfg = Config.from_dict(_settings_config({"corrupt_source": "encode_anyway"}))
+        assert cfg.corrupt_source_for(cfg.outputs[0]) == "encode_anyway"
+
+    def test_output_overrides_global(self):
+        data = _settings_config({"corrupt_source": "skip"})
+        data["outputs"].append(
+            {
+                "name": "aac",
+                "codec": "aac",
+                "path": "/music/aac",
+                "corrupt_source": "encode_anyway",
+            }
+        )
+        cfg = Config.from_dict(data)
+        alac, aac = cfg.outputs
+        assert cfg.corrupt_source_for(alac) == "skip"
+        assert cfg.corrupt_source_for(aac) == "encode_anyway"
+
+    def test_rejects_unknown_global_value(self):
+        with pytest.raises(ValueError, match="settings.corrupt_source"):
+            Config.from_dict(_settings_config({"corrupt_source": "ignore"}))
+
+    def test_rejects_unknown_output_value(self):
+        with pytest.raises(ValueError, match="corrupt_source"):
+            OutputConfig.from_dict(
+                {"name": "aac", "codec": "aac", "path": "/a", "corrupt_source": "yes"}
+            )

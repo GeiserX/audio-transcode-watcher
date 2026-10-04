@@ -14,10 +14,12 @@ from pathlib import Path
 from . import manifest
 from .config import Config, OutputConfig
 from .encoder import (
+    DECODE_ERROR_RC,
     atomic_ffmpeg_encode,
     build_ffmpeg_command,
     copy_mp4_tags,
     portable_limit_args,
+    tolerant_command,
 )
 from .lyrics import fetch_lyrics_for_file
 from .utils import (
@@ -320,6 +322,23 @@ def _made_from_lossy(output: OutputConfig, out_path: str) -> bool:
     return True
 
 
+def _tolerant_source_changed(
+    output: OutputConfig, out_path: str, source_path: str
+) -> bool:
+    """True if *out_path* is a tolerant copy and its source has since changed.
+
+    A damaged source replaced by a clean copy gets a strict encode again.
+    """
+    row = manifest.lookup(output.path, out_path)
+    if not row or row.get("kind") != "tolerant":
+        return False
+    try:
+        st = os.stat(source_path)
+    except OSError:
+        return False
+    return (st.st_size, st.st_mtime) != (row.get("size"), row.get("mtime"))
+
+
 def _process_outputs(source_path: str, config: Config, force: bool) -> bool:
     """
     Process all outputs for a source file.
@@ -347,13 +366,19 @@ def _process_outputs(source_path: str, config: Config, force: bool) -> bool:
         if siblings:
             _remove_lossy_copies(source_path, siblings, output, config)
         if not force and os.path.exists(out_path):
-            if not (is_lossless(source_path) and _made_from_lossy(output, out_path)):
+            if _tolerant_source_changed(output, out_path, source_path):
+                logger.info(
+                    "Rebuilding %s: it was made from a damaged source that has changed",
+                    out_path,
+                )
+            elif is_lossless(source_path) and _made_from_lossy(output, out_path):
+                logger.info(
+                    "Replacing %s: it was made from a lossy source, %s wins",
+                    out_path,
+                    source_path,
+                )
+            else:
                 continue
-            logger.info(
-                "Replacing %s: it was made from a lossy source, %s wins",
-                out_path,
-                source_path,
-            )
 
         os.makedirs(os.path.dirname(out_path), exist_ok=True)
         if action == "copy":
@@ -371,18 +396,36 @@ def _process_outputs(source_path: str, config: Config, force: bool) -> bool:
 
         cmd = build_ffmpeg_command(source_path, out_path, output)
         rc = atomic_ffmpeg_encode(cmd, out_path, finalize=finalize)
-        if rc == 0:
-            kind = "encode" if is_lossless(source_path) else "transcode"
-            manifest.record(
-                output.path, out_path, config.source_path, source_path, kind
-            )
-        else:
+        kind = "encode" if is_lossless(source_path) else "transcode"
+        if rc != 0:
             logger.error(
                 "%s encode failed for %s",
                 output.name.upper(),
                 source_path,
             )
+            # Remembered even if the tolerant run below succeeds, so the
+            # strict attempt is not repeated on every scan.
             ok = False
+            if (
+                rc == DECODE_ERROR_RC
+                and config.corrupt_source_for(output) == "encode_anyway"
+            ):
+                rc = atomic_ffmpeg_encode(
+                    tolerant_command(cmd), out_path, finalize=finalize, strict=False
+                )
+                if rc == 0:
+                    kind = "tolerant"
+                    logger.warning(
+                        "%s copy %s was made from a damaged source %s; "
+                        "it may glitch where the source is corrupt",
+                        output.name.upper(),
+                        out_path,
+                        source_path,
+                    )
+        if rc == 0:
+            manifest.record(
+                output.path, out_path, config.source_path, source_path, kind
+            )
     return ok
 
 
