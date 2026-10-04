@@ -77,6 +77,29 @@ A lossy source is never encoded into a lossless output, because that only makes 
 
 When a lossless and a lossy file share a name in the source folder, the lossless one is used for every output. If the lossy file came first and was already copied, the copy is removed and the lossless file is encoded as soon as it is processed.
 
+## Portable limits (channels and sample rate)
+
+Each output can cap the channel count and the sample rate:
+
+```yaml
+  - name: aac-256
+    codec: aac
+    bitrate: 256k
+    path: /music/aac
+    channels: 2              # downmix anything with more channels to stereo
+    max_sample_rate: 48000   # resample anything above 48 kHz
+```
+
+`aac` outputs get `channels: 2` and `max_sample_rate: 48000` when they don't set them, because they are for phones, AirPods and CarPlay. Every other codec has no limit unless you set one, and `0` turns a limit off (also for `aac`).
+
+The sample rate never goes up, and a rate above the cap drops within its own family: 88.2 and 176.4 kHz become 44.1 kHz, 96 and 192 kHz become 48 kHz. A rate from neither family goes to the cap. A mono or stereo source is never upmixed. ALAC and the other lossless outputs keep the source's rate and channels.
+
+Changing these settings does not rebuild files that already exist. They are re-encoded when their source changes, or on startup with `force_reencode: true`. To rebuild only the files above the limits, delete them and let the next periodic sync encode them again:
+
+```bash
+docker exec audio_transcoder find /music/aac -name '*.m4a' -exec sh -c 'ffprobe -v error -select_streams a:0 -show_entries stream=sample_rate,channels -of default=nw=1 "$1" | awk -F= "/^sample_rate/{r=\$2} /^channels/{c=\$2} END{exit !(r>48000||c>2)}" && rm -v "$1"' _ {} \;
+```
+
 ## Tags in ALAC and AAC outputs
 
 FFmpeg writes the standard MP4 atoms (title, artist, album and so on). After an ALAC or AAC encode, the tags FFmpeg drops are copied from the source under the names MusicBrainz Picard uses, so Picard, TagLib (Navidrome, Jellyfin), foobar2000 and iTunes all read them:

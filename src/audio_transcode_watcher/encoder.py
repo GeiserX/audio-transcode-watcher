@@ -162,8 +162,60 @@ def build_ffmpeg_command(
     else:
         raise ValueError(f"Unsupported codec: {codec}")
 
+    cmd.extend(portable_limit_args(source, output_config))
     cmd.append(dest)
     return cmd
+
+
+def target_sample_rate(source_rate: int, max_rate: int) -> int | None:
+    """
+    Return the rate to resample *source_rate* to under *max_rate*, or None.
+
+    Never upsamples. A rate above the cap drops to the highest rate of its
+    own family that fits: 88.2 and 176.4 kHz go to 44.1 kHz, 96 and 192 kHz
+    to 48 kHz. A rate from neither family goes to the cap itself.
+    """
+    if not max_rate or not source_rate or source_rate <= max_rate:
+        return None
+    for base in (44100, 48000):
+        if source_rate % base == 0:
+            rate = base
+            while rate * 2 <= max_rate:
+                rate *= 2
+            while rate > max_rate and rate % 2 == 0:
+                rate //= 2
+            return rate
+    return max_rate
+
+
+def limit_args(
+    source_rate: int | None, source_channels: int | None, output: OutputConfig
+) -> list[str]:
+    """ffmpeg arguments that apply the output's channel and sample-rate limits."""
+    args: list[str] = []
+    if output.channels and source_channels and source_channels > output.channels:
+        args.extend(["-ac", str(output.channels)])
+    rate = target_sample_rate(source_rate or 0, output.max_sample_rate or 0)
+    if rate:
+        args.extend(["-ar", str(rate)])
+    return args
+
+
+def _probe_shape(source: str) -> tuple[int | None, int | None]:
+    """Return (sample rate, channels) of *source*, or Nones if unreadable."""
+    try:
+        info = mutagen.File(source).info
+    except Exception:  # noqa: BLE001 - any unreadable file means "unknown"
+        return None, None
+    return getattr(info, "sample_rate", None), getattr(info, "channels", None)
+
+
+def portable_limit_args(source: str, output: OutputConfig) -> list[str]:
+    """Probe *source* only when *output* has a limit, and return its arguments."""
+    if not output.channels and not output.max_sample_rate:
+        return []
+    rate, channels = _probe_shape(source)
+    return limit_args(rate, channels, output)
 
 
 def _remove_artwork_from_command(cmd: list[str]) -> list[str]:

@@ -293,3 +293,48 @@ class TestSyncIntervalTypes:
             ).sync_interval_seconds
             == 90.5
         )
+
+
+class TestPortableLimits:
+    """channels / max_sample_rate per output, with AAC defaults."""
+
+    def test_aac_defaults(self):
+        out = OutputConfig(name="aac", codec="aac", path="/a")
+        assert (out.channels, out.max_sample_rate) == (2, 48000)
+
+    @pytest.mark.parametrize("codec", ["alac", "flac", "wav", "mp3", "opus"])
+    def test_other_codecs_have_no_limit(self, codec):
+        out = OutputConfig(name=codec, codec=codec, path="/a")
+        assert (out.channels, out.max_sample_rate) == (0, 0)
+
+    def test_from_dict_reads_and_opts_in(self):
+        out = OutputConfig.from_dict(
+            {
+                "name": "mp3",
+                "codec": "mp3",
+                "path": "/m",
+                "channels": 2,
+                "max_sample_rate": 44100,
+            }
+        )
+        assert (out.channels, out.max_sample_rate) == (2, 44100)
+
+    def test_zero_turns_the_aac_limits_off(self):
+        out = OutputConfig.from_dict(
+            {
+                "name": "aac",
+                "codec": "aac",
+                "path": "/a",
+                "channels": 0,
+                "max_sample_rate": 0,
+            }
+        )
+        assert (out.channels, out.max_sample_rate) == (0, 0)
+
+    @pytest.mark.parametrize("key", ["channels", "max_sample_rate"])
+    @pytest.mark.parametrize("bad", [True, "2", -1, 2.5])
+    def test_rejects_bad_values(self, key, bad):
+        with pytest.raises(ValueError, match=key):
+            OutputConfig.from_dict(
+                {"name": "aac", "codec": "aac", "path": "/a", key: bad}
+            )

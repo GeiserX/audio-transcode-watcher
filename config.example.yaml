@@ -1,4 +1,4 @@
-# Audio Transcode Watcher Configuration (0.6.0)
+# Audio Transcode Watcher Configuration (0.6.1)
 # ======================================
 #
 # This configuration file defines the source folder and output destinations
@@ -28,12 +28,18 @@ outputs:
     path: /music/mp3
     include_artwork: true
   
-  # AAC 256kbps for modern devices
+  # AAC 256kbps for phones, AirPods and CarPlay
   - name: aac-256
     codec: aac
     bitrate: 256k
     path: /music/aac
     include_artwork: true
+    # Portable limits. These are the AAC defaults, shown for reference:
+    # more than 2 channels are downmixed to stereo, and rates above 48 kHz
+    # drop to 44.1 kHz (88.2/176.4 kHz sources) or 48 kHz (96/192 kHz).
+    # Lower rates are never upsampled. Any codec can opt in; 0 = no limit.
+    channels: 2
+    max_sample_rate: 48000
 
 # Optional settings
 settings:

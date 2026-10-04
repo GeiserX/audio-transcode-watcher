@@ -1,5 +1,6 @@
 """Tests for FFmpeg encoder module."""
 
+import json
 import logging
 import os
 import shutil
@@ -18,6 +19,8 @@ from audio_transcode_watcher.encoder import (
     atomic_ffmpeg_encode,
     build_ffmpeg_command,
     copy_mp4_tags,
+    limit_args,
+    target_sample_rate,
 )
 
 
@@ -814,3 +817,180 @@ class TestFfmpegTimeout:
         assert run.call_args.kwargs["timeout"] == 1800
         assert not os.path.exists(dest)
         assert "timed out" in caplog.text
+
+
+class TestTargetSampleRate:
+    """Cap the rate within its own family, never upsample."""
+
+    @pytest.mark.parametrize(
+        "src,cap,expected",
+        [
+            (44100, 48000, None),
+            (48000, 48000, None),
+            (32000, 48000, None),
+            (22050, 48000, None),
+            (88200, 48000, 44100),
+            (176400, 48000, 44100),
+            (352800, 48000, 44100),
+            (96000, 48000, 48000),
+            (192000, 48000, 48000),
+            (384000, 48000, 48000),
+            (64000, 48000, 48000),
+            (192000, 96000, 96000),
+            (176400, 96000, 88200),
+            (96000, 32000, 24000),
+            (88200, 32000, 22050),
+            (96000, 0, None),
+            (0, 48000, None),
+        ],
+    )
+    def test_rates(self, src, cap, expected):
+        assert target_sample_rate(src, cap) == expected
+
+
+AAC = OutputConfig(name="aac", codec="aac", path="/out")
+ALAC = OutputConfig(name="alac", codec="alac", path="/out")
+
+
+class TestPortableAacArgs:
+    """AAC gets -ac 2 and a 48 kHz cap by default; nothing else changes."""
+
+    @pytest.mark.parametrize(
+        "rate,channels,expected",
+        [
+            (44100, 2, []),
+            (48000, 1, []),
+            (44100, 6, ["-ac", "2"]),
+            (48000, 8, ["-ac", "2"]),
+            (88200, 2, ["-ar", "44100"]),
+            (176400, 2, ["-ar", "44100"]),
+            (96000, 2, ["-ar", "48000"]),
+            (192000, 6, ["-ac", "2", "-ar", "48000"]),
+            (None, None, []),
+        ],
+    )
+    def test_limit_args(self, rate, channels, expected):
+        assert limit_args(rate, channels, AAC) == expected
+
+    @pytest.mark.parametrize(
+        "rate,channels,expected",
+        [
+            (44100, 2, []),
+            (96000, 2, ["-ar", "48000"]),
+            (88200, 6, ["-ac", "2", "-ar", "44100"]),
+        ],
+    )
+    def test_aac_command_gets_limits_before_the_output(self, rate, channels, expected):
+        with patch(
+            "audio_transcode_watcher.encoder._probe_shape",
+            return_value=(rate, channels),
+        ):
+            cmd = build_ffmpeg_command("/in/a.flac", "/out/a.m4a", AAC)
+        assert cmd[-1] == "/out/a.m4a"
+        tail = cmd[cmd.index("mp4") + 1 : -1]
+        assert tail == expected
+
+    @pytest.mark.parametrize("codec", ["alac", "flac", "wav", "mp3", "opus"])
+    def test_other_codecs_untouched_and_not_probed(self, codec):
+        out = OutputConfig(name=codec, codec=codec, path="/out")
+        with patch(
+            "audio_transcode_watcher.encoder._probe_shape", return_value=(192000, 6)
+        ) as probe:
+            cmd = build_ffmpeg_command("/in/a.flac", "/out/a.x", out)
+        assert "-ac" not in cmd and "-ar" not in cmd
+        probe.assert_not_called()
+
+    def test_another_codec_can_opt_in(self):
+        mp3 = OutputConfig(
+            name="mp3", codec="mp3", path="/out", channels=2, max_sample_rate=48000
+        )
+        with patch(
+            "audio_transcode_watcher.encoder._probe_shape", return_value=(96000, 6)
+        ):
+            cmd = build_ffmpeg_command("/in/a.flac", "/out/a.mp3", mp3)
+        assert cmd[-5:-1] == ["-ac", "2", "-ar", "48000"]
+
+    def test_unreadable_source_adds_nothing(self, tmp_path):
+        junk = tmp_path / "junk.flac"
+        junk.write_bytes(b"not audio")
+        cmd = build_ffmpeg_command(str(junk), "/out/a.m4a", AAC)
+        assert "-ac" not in cmd and "-ar" not in cmd
+
+
+def _probe(path) -> tuple[int, int]:
+    out = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "a:0",
+            "-show_entries",
+            "stream=sample_rate,channels",
+            "-of",
+            "json",
+            str(path),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    stream = json.loads(out)["streams"][0]
+    return int(stream["sample_rate"]), int(stream["channels"])
+
+
+@needs_ffmpeg
+class TestPortableAacRealFiles:
+    """Real hi-res and multichannel FLACs through the AAC and ALAC encodes."""
+
+    @staticmethod
+    def _flac(path, lavfi):
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                lavfi,
+                "-t",
+                "2",
+                "-c:a",
+                "flac",
+                str(path),
+            ],
+            check=True,
+        )
+
+    def _encode(self, src, output, tmp_path):
+        dest = str(tmp_path / output.codec / "out.m4a")
+        assert (
+            atomic_ffmpeg_encode(build_ffmpeg_command(str(src), dest, output), dest)
+            == 0
+        )
+        return _probe(dest)
+
+    def test_96k_flac_becomes_48k_aac(self, tmp_path):
+        src = tmp_path / "hires.flac"
+        self._flac(src, "sine=frequency=440:sample_rate=96000")
+        assert _probe(src) == (96000, 1)
+        assert self._encode(
+            src, OutputConfig(name="aac", codec="aac", path="/x"), tmp_path
+        ) == (48000, 1)
+
+    def test_6_channel_flac_becomes_stereo_aac(self, tmp_path):
+        src = tmp_path / "surround.flac"
+        self._flac(src, "anullsrc=channel_layout=5.1:sample_rate=48000")
+        assert _probe(src) == (48000, 6)
+        assert self._encode(
+            src, OutputConfig(name="aac", codec="aac", path="/x"), tmp_path
+        ) == (48000, 2)
+
+    def test_alac_keeps_96k_and_6_channels(self, tmp_path):
+        src = tmp_path / "hires-surround.flac"
+        self._flac(src, "anullsrc=channel_layout=5.1:sample_rate=96000")
+        assert self._encode(
+            src, OutputConfig(name="alac", codec="alac", path="/x"), tmp_path
+        ) == (96000, 6)

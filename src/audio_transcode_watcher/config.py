@@ -42,6 +42,12 @@ DEFAULT_BITRATES = {
     "opus": "128k",
 }
 
+# Portable-playback limits applied when an output does not set them.
+# AAC goes to phones, AirPods and CarPlay: stereo, at most 48 kHz.
+# Any codec can opt in by setting channels / max_sample_rate; 0 = no limit.
+DEFAULT_CHANNELS = {"aac": 2}
+DEFAULT_MAX_SAMPLE_RATE = {"aac": 48000}
+
 
 @dataclass
 class OutputConfig:
@@ -52,6 +58,8 @@ class OutputConfig:
     path: str
     bitrate: str = ""
     include_artwork: bool = True
+    channels: int | None = None  # Downmix above this many channels; 0 = keep
+    max_sample_rate: int | None = None  # Resample above this rate (Hz); 0 = keep
 
     def __post_init__(self) -> None:
         """Validate and set defaults after initialization."""
@@ -70,6 +78,17 @@ class OutputConfig:
         # Artwork not supported for some codecs
         if self.include_artwork and self.codec not in ARTWORK_SUPPORTED_CODECS:
             self.include_artwork = False
+
+        if self.channels is None:
+            self.channels = DEFAULT_CHANNELS.get(self.codec, 0)
+        if self.max_sample_rate is None:
+            self.max_sample_rate = DEFAULT_MAX_SAMPLE_RATE.get(self.codec, 0)
+        for key in ("channels", "max_sample_rate"):
+            value = getattr(self, key)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(
+                    f"Output '{self.name}': {key} must be a whole number, 0 for no limit"
+                )
 
     @property
     def extension(self) -> str:
@@ -90,6 +109,8 @@ class OutputConfig:
             path=data["path"],
             bitrate=data.get("bitrate", ""),
             include_artwork=data.get("include_artwork", True),
+            channels=data.get("channels"),
+            max_sample_rate=data.get("max_sample_rate"),
         )
 
 

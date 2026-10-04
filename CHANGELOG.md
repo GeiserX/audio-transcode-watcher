@@ -4,6 +4,14 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [0.6.1] - 2026-10-04
 
+### Added
+
+- Per-output `channels` and `max_sample_rate`. An `aac` output now defaults to `channels: 2` and `max_sample_rate: 48000`, so the AAC copies play everywhere a phone, AirPods or CarPlay can take them: anything with more than two channels is downmixed to stereo, 88.2 and 176.4 kHz sources become 44.1 kHz, and 96 and 192 kHz sources become 48 kHz. Nothing is ever upsampled or upmixed. Other codecs have no limit unless they set one, and `0` turns a limit off. ALAC is unchanged.
+
+### Upgrading
+
+- Existing AAC files are not rebuilt by the upgrade. They are re-encoded only when their source changes, or with `force_reencode: true` on startup. To rebuild just the hi-res and multichannel ones, delete the AAC files above 48 kHz or 2 channels and the next periodic sync encodes them again: `docker exec audio_transcoder find /music/aac -name '*.m4a' -exec sh -c 'ffprobe -v error -select_streams a:0 -show_entries stream=sample_rate,channels -of default=nw=1 "$1" | awk -F= "/^sample_rate/{r=\$2} /^channels/{c=\$2} END{exit !(r>48000||c>2)}" && rm -v "$1"' _ {} \;`
+
 ### Security
 
 - `urllib3` is now required at 2.8.0 or newer, for GHSA-vxq7-64xx-v4gw, GHSA-8988-9cw3-xx77 and GHSA-gh4c-6fx4-qh6g. It comes in through syncedlyrics and requests; the image installs from `pyproject.toml`, so the floor is declared there and `uv.lock` resolves 2.8.0.
