@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import filecmp
 import logging
 import os
 import shutil
@@ -11,11 +12,12 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from .config import Config, OutputConfig
-from .encoder import atomic_ffmpeg_encode, build_ffmpeg_command, copy_freeform_tags
+from .encoder import atomic_ffmpeg_encode, build_ffmpeg_command, copy_mp4_tags
 from .lyrics import fetch_lyrics_for_file
 from .utils import (
     AUDIO_EXTENSIONS,
     LOSSLESS_EXTENSIONS,
+    LOSSY_EXTENSIONS,
     SIDECAR_EXTENSIONS,
     appears_empty_dir,
     get_output_file_path,
@@ -54,7 +56,7 @@ ORPHAN_MIN_AGE = 120.0
 # A .tmp__ff file younger than this (seconds) may be an encode in progress.
 TEMP_MIN_AGE = 600.0
 
-# Output codecs whose files are MP4 and take iTunes freeform tags.
+# Output codecs whose files are MP4 and take the extra MP4 tags.
 _MP4_CODECS = {"alac", "aac"}
 
 # Safety guard logging throttle
@@ -197,6 +199,47 @@ def _has_lossless_source(source_path: str, config: Config) -> bool:
     return False
 
 
+def _lossy_siblings(source_path: str) -> list[str]:
+    """Lossy sources with the same stem as *source_path*, in its folder."""
+    stem = Path(source_path).stem
+    source_dir = os.path.dirname(source_path)
+    siblings = []
+    for ext in sorted(LOSSY_EXTENSIONS):
+        other = nfc_path(os.path.join(source_dir, f"{stem}{ext}"))
+        if other != source_path and os.path.isfile(other):
+            siblings.append(other)
+    return siblings
+
+
+def _remove_lossy_copies(
+    source_path: str, siblings: list[str], output: OutputConfig, config: Config
+) -> None:
+    """
+    Remove copies of *siblings* from *output*: the lossless *source_path* wins.
+
+    A copy under a different name (``X.mp3`` beside the ``X.m4a`` encode)
+    always goes. A copy under the encode's own name (``X.m4a`` copied before
+    ``X.flac`` arrived) goes only while it is still byte-identical to the
+    lossy source, so a finished encode is never thrown away.
+    """
+    own_name, _ = plan_output(source_path, output)
+    own_path = get_output_file_path(source_path, config.source_path, output.path, own_name)
+    for sibling in siblings:
+        name, action = plan_output(sibling, output)
+        if action != "copy":
+            continue
+        copy_path = get_output_file_path(sibling, config.source_path, output.path, name)
+        try:
+            if not os.path.exists(copy_path):
+                continue
+            if copy_path == own_path and not filecmp.cmp(sibling, copy_path, shallow=True):
+                continue
+            logger.info("✘ remove lossy copy %s (lossless %s wins)", copy_path, source_path)
+            os.remove(copy_path)
+        except OSError as e:
+            logger.error("Failed to remove lossy copy %s: %s", copy_path, e)
+
+
 def _has_other_source(source_path: str) -> bool:
     """Check if another audio source with the same stem exists."""
     stem = Path(source_path).stem
@@ -254,6 +297,8 @@ def _process_outputs(source_path: str, config: Config, force: bool) -> bool:
         logger.debug("Skipping lossy %s - lossless source exists", source_path)
         return True
 
+    siblings = _lossy_siblings(source_path) if is_lossless(source_path) else []
+
     ok = True
     for output in config.outputs:
         if safety_guard_active(config):
@@ -263,6 +308,8 @@ def _process_outputs(source_path: str, config: Config, force: bool) -> bool:
         out_path = get_output_file_path(
             source_path, config.source_path, output.path, out_filename,
         )
+        if siblings:
+            _remove_lossy_copies(source_path, siblings, output, config)
         if not force and os.path.exists(out_path):
             continue
 
@@ -274,7 +321,7 @@ def _process_outputs(source_path: str, config: Config, force: bool) -> bool:
         finalize = None
         if output.codec in _MP4_CODECS:
             def finalize(tmp: str, src: str = source_path) -> None:
-                copy_freeform_tags(src, tmp)
+                copy_mp4_tags(src, tmp)
 
         cmd = build_ffmpeg_command(source_path, out_path, output)
         rc = atomic_ffmpeg_encode(cmd, out_path, finalize=finalize)

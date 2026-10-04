@@ -254,3 +254,15 @@ class TestLrcOwnership:
         assert os.path.isfile(lrc_path)
         chown_logs = [r for r in caplog.records if "Could not chown" in r.getMessage()]
         assert chown_logs and chown_logs[0].levelno == logging.DEBUG
+
+
+class TestLrcModeFailure:
+    @patch("audio_transcode_watcher.lyrics.os.chmod", side_effect=PermissionError("ro"))
+    def test_chmod_failure_is_logged_at_debug(self, _chmod, tmp_path, caplog):
+        audio = tmp_path / "song.flac"
+        audio.touch()
+        lrc_path = str(tmp_path / "song.lrc")
+        with caplog.at_level(logging.DEBUG, logger="audio_transcode_watcher.lyrics"):
+            assert _write_lrc(lrc_path, GOOD_LRC, "l", "s", owner_of=str(audio)) == lrc_path
+        msgs = [r for r in caplog.records if "Could not chmod" in r.getMessage()]
+        assert msgs and msgs[0].levelno == logging.DEBUG

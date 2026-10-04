@@ -75,11 +75,22 @@ A lossless source is encoded to every output.
 
 A lossy source is never encoded into a lossless output, because that only makes a big file that looks lossless. It is copied there unchanged, with its own extension, so an ALAC folder can hold `.m4a` encodes next to `.mp3` or `.ogg` copies. Into a lossy output it is copied unchanged when it already has that output's codec (`.mp3` into `mp3`, `.m4a` or `.aac` into `aac`, `.opus` into `opus`) and transcoded otherwise. Copies keep their tags and cover as they are.
 
-When a lossless and a lossy file share a name in the source folder, the lossless one is used for every output.
+When a lossless and a lossy file share a name in the source folder, the lossless one is used for every output. If the lossy file came first and was already copied, the copy is removed and the lossless file is encoded as soon as it is processed.
 
 ## Tags in ALAC and AAC outputs
 
-FFmpeg writes the standard MP4 atoms (title, artist, album and so on). After an ALAC or AAC encode, the tags those atoms cannot hold are copied from the source as iTunes freeform atoms named `----:com.apple.iTunes:<NAME>`: `REPLAYGAIN_TRACK_GAIN`, `REPLAYGAIN_TRACK_PEAK`, `REPLAYGAIN_ALBUM_GAIN`, `REPLAYGAIN_ALBUM_PEAK`, `MUSICBRAINZ_TRACKID`, `MUSICBRAINZ_ALBUMID`, `MUSICBRAINZ_ARTISTID`, `MUSICBRAINZ_ALBUMARTISTID`, `MUSICBRAINZ_RELEASEGROUPID`, `ISRC`, `LABEL`, `CATALOGNUMBER`, `ARTISTSORT`, `ALBUMARTISTSORT` and `ALBUMSORT`.
+FFmpeg writes the standard MP4 atoms (title, artist, album and so on). After an ALAC or AAC encode, the tags FFmpeg drops are copied from the source under the names MusicBrainz Picard uses, so Picard, TagLib (Navidrome, Jellyfin), foobar2000 and iTunes all read them:
+
+| Source tag                                   | MP4 atom                                              |
+|----------------------------------------------|-------------------------------------------------------|
+| `REPLAYGAIN_TRACK_GAIN`, `_TRACK_PEAK`, `_ALBUM_GAIN`, `_ALBUM_PEAK` | `----:com.apple.iTunes:replaygain_track_gain` and so on, lowercase |
+| `MUSICBRAINZ_TRACKID`                        | `----:com.apple.iTunes:MusicBrainz Track Id`          |
+| `MUSICBRAINZ_ALBUMID`                        | `----:com.apple.iTunes:MusicBrainz Album Id`          |
+| `MUSICBRAINZ_ARTISTID`                       | `----:com.apple.iTunes:MusicBrainz Artist Id`         |
+| `MUSICBRAINZ_ALBUMARTISTID`                  | `----:com.apple.iTunes:MusicBrainz Album Artist Id`   |
+| `MUSICBRAINZ_RELEASEGROUPID`                 | `----:com.apple.iTunes:MusicBrainz Release Group Id`  |
+| `ISRC`, `LABEL`, `CATALOGNUMBER`             | `----:com.apple.iTunes:ISRC`, `LABEL`, `CATALOGNUMBER` |
+| `ARTISTSORT`, `ALBUMARTISTSORT`, `ALBUMSORT` | the standard sort atoms `soar`, `soaa`, `soal`        |
 
 ## Supported Codecs
 

@@ -35,25 +35,28 @@ _ARTWORK_ERROR_HINTS = (
     "vf#",
 )
 
-# Tags the standard MP4 atoms cannot hold, copied after an ALAC or AAC
-# encode as iTunes freeform atoms ``----:com.apple.iTunes:<NAME>``.
-FREEFORM_TAGS = (
-    "REPLAYGAIN_TRACK_GAIN",
-    "REPLAYGAIN_TRACK_PEAK",
-    "REPLAYGAIN_ALBUM_GAIN",
-    "REPLAYGAIN_ALBUM_PEAK",
-    "MUSICBRAINZ_TRACKID",
-    "MUSICBRAINZ_ALBUMID",
-    "MUSICBRAINZ_ARTISTID",
-    "MUSICBRAINZ_ALBUMARTISTID",
-    "MUSICBRAINZ_RELEASEGROUPID",
-    "ISRC",
-    "LABEL",
-    "CATALOGNUMBER",
-    "ARTISTSORT",
-    "ALBUMARTISTSORT",
-    "ALBUMSORT",
-)
+# Tags ffmpeg drops on an ALAC or AAC encode, copied from the source after
+# it: source tag name -> MP4 atom. The atom names are the ones MusicBrainz
+# Picard writes, so Picard, TagLib (Navidrome, Jellyfin), foobar2000 and
+# iTunes all recognise them. Sort names go to the standard sort atoms.
+_FREEFORM = "----:com.apple.iTunes:"
+MP4_TAG_ATOMS = {
+    "REPLAYGAIN_TRACK_GAIN": _FREEFORM + "replaygain_track_gain",
+    "REPLAYGAIN_TRACK_PEAK": _FREEFORM + "replaygain_track_peak",
+    "REPLAYGAIN_ALBUM_GAIN": _FREEFORM + "replaygain_album_gain",
+    "REPLAYGAIN_ALBUM_PEAK": _FREEFORM + "replaygain_album_peak",
+    "MUSICBRAINZ_TRACKID": _FREEFORM + "MusicBrainz Track Id",
+    "MUSICBRAINZ_ALBUMID": _FREEFORM + "MusicBrainz Album Id",
+    "MUSICBRAINZ_ARTISTID": _FREEFORM + "MusicBrainz Artist Id",
+    "MUSICBRAINZ_ALBUMARTISTID": _FREEFORM + "MusicBrainz Album Artist Id",
+    "MUSICBRAINZ_RELEASEGROUPID": _FREEFORM + "MusicBrainz Release Group Id",
+    "ISRC": _FREEFORM + "ISRC",
+    "LABEL": _FREEFORM + "LABEL",
+    "CATALOGNUMBER": _FREEFORM + "CATALOGNUMBER",
+    "ARTISTSORT": "soar",
+    "ALBUMARTISTSORT": "soaa",
+    "ALBUMSORT": "soal",
+}
 
 # How the same tags are stored in ID3 (WAV, AIFF and MP3 sources).
 _ID3_FRAMES = {
@@ -287,7 +290,7 @@ def atomic_ffmpeg_encode(
 
 def _source_tag_values(source: str) -> dict[str, list[str]]:
     """
-    Read FREEFORM_TAGS from *source*, whatever its tag format.
+    Read the MP4_TAG_ATOMS source tags from *source*, whatever its tag format.
 
     Vorbis comments (FLAC, Ogg, Opus) and APEv2 (APE, WavPack, TAK) store
     them under the same names; ID3 (WAV, AIFF, MP3) uses TXXX and a few
@@ -325,17 +328,18 @@ def _source_tag_values(source: str) -> dict[str, list[str]]:
             plain[str(key).upper()] = [str(v) for v in values]
 
     out: dict[str, list[str]] = {}
-    for name in FREEFORM_TAGS:
+    for name in MP4_TAG_ATOMS:
         values = [v for v in plain.get(name, []) if v.strip()]
         if values:
             out[name] = values
     return out
 
 
-def copy_freeform_tags(source: str, dest: str) -> int:
+def copy_mp4_tags(source: str, dest: str) -> int:
     """
-    Copy FREEFORM_TAGS from *source* into the MP4 file *dest*.
+    Copy the MP4_TAG_ATOMS tags from *source* into the MP4 file *dest*.
 
+    Freeform atoms hold UTF-8 bytes; the sort atoms hold text.
     Returns the number of tags written.
     """
     values = _source_tag_values(source)
@@ -345,9 +349,11 @@ def copy_freeform_tags(source: str, dest: str) -> int:
     if mp4.tags is None:
         mp4.add_tags()
     for name, vals in values.items():
-        mp4.tags[f"----:com.apple.iTunes:{name}"] = [
-            MP4FreeForm(v.encode("utf-8")) for v in vals
-        ]
+        atom = MP4_TAG_ATOMS[name]
+        if atom.startswith(_FREEFORM):
+            mp4.tags[atom] = [MP4FreeForm(v.encode("utf-8")) for v in vals]
+        else:
+            mp4.tags[atom] = vals
     mp4.save()
     return len(values)
 

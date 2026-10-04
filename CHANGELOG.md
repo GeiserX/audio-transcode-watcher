@@ -9,13 +9,13 @@ All notable changes to this project are documented here. The format follows [Kee
 - Lossy sources are copied, not encoded. An MP3, M4A, AAC, Ogg, Opus or WMA file in the source folder lands in a lossless output (ALAC, FLAC, WAV) as an unchanged copy with its own extension. Before, everything except MP3 was encoded to ALAC, which turned a lossy file into a lossless-sized one that only looked lossless.
 - Into a lossy output, a lossy source is copied unchanged when it already has that output's codec (an MP3 into an MP3 output, an M4A into an AAC output). It is transcoded only when the codecs differ. That is the one lossy-to-lossy encode left.
 - Ogg and Opus are now treated as lossy. AIF and TAK are now recognised as lossless sources, and WMA as a lossy one. Files with these extensions used to be ignored.
-- When a lossless and a lossy file share a name in the source folder, the lossless file wins in every output.
+- When a lossless and a lossy file share a name in the source folder, the lossless file wins in every output. If the lossy file arrived first, its copy is removed and the lossless file is encoded when it is processed, not left behind until an orphan pass.
 - The periodic full sync logs as "Periodic sync" instead of "Initial sync", so the logs no longer read like restarts. Its interval is the new setting `settings.sync_interval_seconds` (default 300).
 - A lyrics file written next to a source now gets the source file's owner and group and mode 0664, instead of root and 0644.
 
 ### Added
 
-- ALAC and AAC outputs keep the tags the standard MP4 atoms have no room for: ReplayGain track and album gain and peak, the MusicBrainz track, album, artist, album artist and release group ids, ISRC, label, catalog number, and the artist, album artist and album sort names. They are written as iTunes freeform atoms (`----:com.apple.iTunes:REPLAYGAIN_TRACK_GAIN` and so on). FLAC, Ogg, APE, WavPack, TAK, WAV and AIFF sources are read.
+- ALAC and AAC outputs keep the tags the standard MP4 atoms have no room for: ReplayGain track and album gain and peak, the MusicBrainz track, album, artist, album artist and release group ids, ISRC, label, catalog number, and the artist, album artist and album sort names. They use the atom names MusicBrainz Picard writes (`----:com.apple.iTunes:replaygain_track_gain`, `----:com.apple.iTunes:MusicBrainz Track Id`, `ISRC`, `LABEL`, `CATALOGNUMBER`), so Picard, TagLib, foobar2000 and iTunes all read them, and the sort names go to the standard `soar`, `soaa` and `soal` atoms. FLAC, Ogg, APE, WavPack, TAK, WAV and AIFF sources are read.
 - `CHANGELOG.md`.
 
 ### Removed

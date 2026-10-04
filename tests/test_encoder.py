@@ -12,12 +12,12 @@ import pytest
 
 from audio_transcode_watcher.config import OutputConfig
 from audio_transcode_watcher.encoder import (
-    FREEFORM_TAGS,
+    MP4_TAG_ATOMS,
     _cleanup_temp,
     _remove_artwork_from_command,
     atomic_ffmpeg_encode,
     build_ffmpeg_command,
-    copy_freeform_tags,
+    copy_mp4_tags,
 )
 
 
@@ -572,6 +572,39 @@ REAL_TAG_VALUES = {
     "ALBUMSORT": "At Last!",
 }
 
+# The atoms MusicBrainz Picard writes; every common reader knows them.
+EXPECTED_ATOMS = {
+    "REPLAYGAIN_TRACK_GAIN": "----:com.apple.iTunes:replaygain_track_gain",
+    "REPLAYGAIN_TRACK_PEAK": "----:com.apple.iTunes:replaygain_track_peak",
+    "REPLAYGAIN_ALBUM_GAIN": "----:com.apple.iTunes:replaygain_album_gain",
+    "REPLAYGAIN_ALBUM_PEAK": "----:com.apple.iTunes:replaygain_album_peak",
+    "MUSICBRAINZ_TRACKID": "----:com.apple.iTunes:MusicBrainz Track Id",
+    "MUSICBRAINZ_ALBUMID": "----:com.apple.iTunes:MusicBrainz Album Id",
+    "MUSICBRAINZ_ARTISTID": "----:com.apple.iTunes:MusicBrainz Artist Id",
+    "MUSICBRAINZ_ALBUMARTISTID": "----:com.apple.iTunes:MusicBrainz Album Artist Id",
+    "MUSICBRAINZ_RELEASEGROUPID": "----:com.apple.iTunes:MusicBrainz Release Group Id",
+    "ISRC": "----:com.apple.iTunes:ISRC",
+    "LABEL": "----:com.apple.iTunes:LABEL",
+    "CATALOGNUMBER": "----:com.apple.iTunes:CATALOGNUMBER",
+    "ARTISTSORT": "soar",
+    "ALBUMARTISTSORT": "soaa",
+    "ALBUMSORT": "soal",
+}
+
+
+def _atom_text(tags, atom):
+    value = tags[atom][0]
+    return value if isinstance(value, str) else bytes(value).decode()
+
+
+class TestMp4TagAtoms:
+    """The atom names, checked without ffmpeg."""
+
+    def test_atom_names_match_picard(self):
+        assert MP4_TAG_ATOMS == EXPECTED_ATOMS
+        assert set(REAL_TAG_VALUES) == set(MP4_TAG_ATOMS)
+
+
 needs_ffmpeg = pytest.mark.skipif(
     shutil.which("ffmpeg") is None,
     reason="ffmpeg is not installed; the real-file tag checks need it",
@@ -582,11 +615,8 @@ needs_ffmpeg = pytest.mark.skipif(
 class TestFreeformTagsRealFiles:
     """Tags the MP4 atoms cannot hold survive an ALAC or AAC encode."""
 
-    def test_list_covers_the_required_tags(self):
-        assert set(REAL_TAG_VALUES) <= set(FREEFORM_TAGS)
-
     @pytest.mark.parametrize("codec", ["alac", "aac"])
-    def test_flac_tags_land_as_itunes_freeform_atoms(self, tmp_path, codec):
+    def test_flac_tags_land_in_picard_atoms(self, tmp_path, codec):
         from mutagen.flac import FLAC
         from mutagen.mp4 import MP4
 
@@ -603,15 +633,18 @@ class TestFreeformTagsRealFiles:
         dest = str(tmp_path / codec / "Etta James - At Last.m4a")
         cmd = build_ffmpeg_command(str(src), dest, out)
         rc = atomic_ffmpeg_encode(
-            cmd, dest, finalize=lambda tmp: copy_freeform_tags(str(src), tmp)
+            cmd, dest, finalize=lambda tmp: copy_mp4_tags(str(src), tmp)
         )
         assert rc == 0
 
         tags = MP4(dest).tags
         for k, v in REAL_TAG_VALUES.items():
-            atom = f"----:com.apple.iTunes:{k}"
+            atom = EXPECTED_ATOMS[k]
             assert atom in tags, atom
-            assert bytes(tags[atom][0]).decode() == v
+            assert _atom_text(tags, atom) == v
+        # Sort names are plain text in the standard sort atoms.
+        assert tags["soar"] == ["James, Etta"]
+        assert not any(a.startswith("----:com.apple.iTunes:ARTISTSORT") for a in tags)
         # Standard atoms ffmpeg writes are still there.
         assert tags["\xa9nam"] == ["At Last"]
         assert tags["\xa9ART"] == ["Etta James"]
@@ -643,7 +676,7 @@ class TestFreeformTagsRealFiles:
              "-c:a", "alac", "-f", "mp4", str(dest)],
             check=True,
         )
-        assert copy_freeform_tags(str(src), str(dest)) == 6
+        assert copy_mp4_tags(str(src), str(dest)) == 6
 
         tags = MP4(str(dest)).tags
         expect = {
@@ -655,9 +688,39 @@ class TestFreeformTagsRealFiles:
             "ARTISTSORT": "Beatles, The",
         }
         for k, v in expect.items():
-            assert bytes(tags[f"----:com.apple.iTunes:{k}"][0]).decode() == v
+            assert _atom_text(tags, EXPECTED_ATOMS[k]) == v
 
     def test_source_without_tags_writes_nothing(self, tmp_path):
         src = tmp_path / "bare.flac"
         _make_flac(src, seconds=1)
-        assert copy_freeform_tags(str(src), str(tmp_path / "unused.m4a")) == 0
+        assert copy_mp4_tags(str(src), str(tmp_path / "unused.m4a")) == 0
+
+
+class TestEncoderEdges:
+    """Small branches of the new encoder code."""
+
+    def test_source_name_without_input_flag(self, fake_ffmpeg, tmp_path, monkeypatch, caplog):
+        monkeypatch.setenv("FAKE_RC", "2")
+        dest = str(tmp_path / "out.m4a")
+        assert atomic_ffmpeg_encode(["ffmpeg", dest], dest, retry_without_artwork=False) == 2
+        assert "FFmpeg failed (rc=2) for ? →" in caplog.text
+
+    def test_finalize_failure_keeps_the_output(self, fake_ffmpeg, tmp_path, caplog):
+        cmd, dest = _alac_cmd(tmp_path)
+
+        def broken(_tmp):
+            raise ValueError("bad tags")
+
+        assert atomic_ffmpeg_encode(cmd, dest, finalize=broken) == 0
+        assert os.path.isfile(dest)
+        assert "Post-encode step failed" in caplog.text
+
+    def test_finalize_runs_on_the_temp_file(self, fake_ffmpeg, tmp_path):
+        cmd, dest = _alac_cmd(tmp_path)
+        seen = []
+        assert atomic_ffmpeg_encode(cmd, dest, finalize=seen.append) == 0
+        assert seen == [dest + ".tmp__ff"]
+
+    @patch("audio_transcode_watcher.encoder.mutagen.File", return_value=None)
+    def test_unreadable_source_copies_no_tags(self, _file, tmp_path):
+        assert copy_mp4_tags(str(tmp_path / "x.flac"), str(tmp_path / "x.m4a")) == 0
