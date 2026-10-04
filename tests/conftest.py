@@ -1,6 +1,5 @@
 """Pytest fixtures for audio-transcode-watcher tests."""
 
-import os
 import tempfile
 from pathlib import Path
 
@@ -21,12 +20,12 @@ def source_dir(temp_dir):
     """Create a source directory with some test files."""
     src = Path(temp_dir) / "source"
     src.mkdir()
-    
+
     # Create some fake audio files (just empty files for testing)
     (src / "Artist - Song 1.flac").touch()
     (src / "Artist - Song 2.flac").touch()
     (src / "Other - Track.mp3").touch()
-    
+
     return str(src)
 
 

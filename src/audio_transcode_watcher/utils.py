@@ -9,8 +9,15 @@ from pathlib import Path
 
 # Audio file extensions considered as source files
 LOSSLESS_EXTENSIONS = {
-    ".flac", ".alac", ".wav", ".aiff", ".aif",
-    ".ape", ".wv", ".tta", ".tak",
+    ".flac",
+    ".alac",
+    ".wav",
+    ".aiff",
+    ".aif",
+    ".ape",
+    ".wv",
+    ".tta",
+    ".tak",
 }
 
 LOSSY_EXTENSIONS = {".mp3", ".aac", ".m4a", ".ogg", ".opus", ".wma"}
@@ -42,13 +49,13 @@ def nfc_path(p: str) -> str:
     parts = list(Path(p).parts)
     if not parts:
         return p
-    
+
     if parts[0] == os.sep:
         # Absolute path handling on POSIX
         normalized = os.sep + os.path.join(*[nfc(x) for x in parts[1:]])
     else:
         normalized = os.path.join(*[nfc(x) for x in parts])
-    
+
     return normalized
 
 
@@ -97,7 +104,7 @@ def is_mp3(path: str) -> bool:
 def appears_empty_dir(path: str) -> bool:
     """
     Check if a directory appears empty (no non-hidden files).
-    
+
     Returns True if:
     - Directory doesn't exist
     - Directory is not accessible
@@ -106,7 +113,7 @@ def appears_empty_dir(path: str) -> bool:
     try:
         if not os.path.isdir(path):
             return True
-        
+
         with os.scandir(path) as entries:
             for entry in entries:
                 if not entry.name.startswith("."):
@@ -118,45 +125,43 @@ def appears_empty_dir(path: str) -> bool:
 
 
 def wait_for_stable(
-    path: str,
-    min_stable_secs: float = 1.0,
-    timeout: float = 60.0
+    path: str, min_stable_secs: float = 1.0, timeout: float = 60.0
 ) -> bool:
     """
     Wait until file size stays unchanged for min_stable_secs.
-    
+
     Args:
         path: Path to the file
         min_stable_secs: Minimum seconds the file must be stable
         timeout: Maximum time to wait
-    
+
     Returns:
         True if file is stable, False if timed out or file doesn't exist
     """
     path = nfc_path(path)
     start = time.time()
-    
+
     try:
         last_size = os.path.getsize(path)
     except OSError:
         return False
-    
+
     last_change = time.time()
-    
+
     while time.time() - start < timeout:
         try:
             cur_size = os.path.getsize(path)
         except OSError:
             return False
-        
+
         if cur_size != last_size:
             last_size = cur_size
             last_change = time.time()
         elif time.time() - last_change >= min_stable_secs:
             return True
-        
+
         time.sleep(0.2)
-    
+
     return False
 
 

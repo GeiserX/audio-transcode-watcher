@@ -46,41 +46,41 @@ DEFAULT_BITRATES = {
 @dataclass
 class OutputConfig:
     """Configuration for a single output destination."""
-    
+
     name: str
     codec: str
     path: str
     bitrate: str = ""
     include_artwork: bool = True
-    
+
     def __post_init__(self) -> None:
         """Validate and set defaults after initialization."""
         self.codec = self.codec.lower()
-        
+
         if self.codec not in CODEC_EXTENSIONS:
             raise ValueError(
                 f"Unknown codec '{self.codec}'. "
                 f"Supported: {', '.join(CODEC_EXTENSIONS.keys())}"
             )
-        
+
         # Set default bitrate for lossy codecs
         if not self.bitrate and self.codec in DEFAULT_BITRATES:
             self.bitrate = DEFAULT_BITRATES[self.codec]
-        
+
         # Artwork not supported for some codecs
         if self.include_artwork and self.codec not in ARTWORK_SUPPORTED_CODECS:
             self.include_artwork = False
-    
+
     @property
     def extension(self) -> str:
         """Get the file extension for this codec."""
         return CODEC_EXTENSIONS[self.codec]
-    
+
     @property
     def is_lossless(self) -> bool:
         """Check if this codec is lossless."""
         return self.codec in {"alac", "flac", "wav"}
-    
+
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> OutputConfig:
         """Create OutputConfig from a dictionary."""
@@ -96,7 +96,7 @@ class OutputConfig:
 @dataclass
 class Config:
     """Main configuration for audio-transcode-watcher."""
-    
+
     source_path: str
     outputs: list[OutputConfig] = field(default_factory=list)
     force_reencode: bool = False
@@ -106,48 +106,52 @@ class Config:
     min_stable_seconds: float = 1.0
     fetch_lyrics: bool = True  # Auto-fetch .lrc lyrics via syncedlyrics
     sync_interval_seconds: int = 300  # Seconds between periodic full syncs
-    
+
     def __post_init__(self) -> None:
         """Validate configuration after initialization."""
         if not self.source_path:
             raise ValueError("source_path is required")
 
         interval = self.sync_interval_seconds
-        if isinstance(interval, bool) or not isinstance(interval, (int, float)) or interval <= 0:
+        if (
+            isinstance(interval, bool)
+            or not isinstance(interval, (int, float))
+            or interval <= 0
+        ):
             raise ValueError("sync_interval_seconds must be a number greater than 0")
-        
+
         if not self.outputs:
             raise ValueError("At least one output is required")
-        
+
         # Check for duplicate output names
         names = [o.name for o in self.outputs]
         if len(names) != len(set(names)):
             raise ValueError("Duplicate output names detected")
-        
+
         # Check for duplicate output paths
         paths = [o.path for o in self.outputs]
         if len(paths) != len(set(paths)):
             raise ValueError("Duplicate output paths detected")
-    
+
     @property
     def output_paths(self) -> list[str]:
         """Get list of all output directory paths."""
         return [o.path for o in self.outputs]
-    
+
     def get_output_by_name(self, name: str) -> OutputConfig | None:
         """Get an output configuration by name."""
         for output in self.outputs:
             if output.name == name:
                 return output
         return None
-    
+
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Config:
         """Create Config from a dictionary."""
         outputs = [OutputConfig.from_dict(o) for o in data.get("outputs", [])]
         settings = data.get("settings", {})
         _warn_deprecated_settings(settings)
-        
+
         return cls(
             source_path=data.get("source", {}).get("path", ""),
             outputs=outputs,
@@ -159,14 +163,14 @@ class Config:
             fetch_lyrics=settings.get("fetch_lyrics", True),
             sync_interval_seconds=settings.get("sync_interval_seconds", 300),
         )
-    
+
     @classmethod
     def from_yaml_file(cls, path: str) -> Config:
         """Load configuration from a YAML file."""
         with open(path, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f)
         return cls.from_dict(data)
-    
+
     @classmethod
     def from_json_string(cls, json_str: str) -> Config:
         """Load configuration from a JSON string."""
@@ -191,11 +195,11 @@ def _warn_deprecated_settings(settings: dict[str, Any]) -> None:
 def load_config() -> Config:
     """
     Load configuration from environment variables.
-    
+
     Configuration is loaded from one of these sources (in priority order):
     1. CONFIG_FILE env var - path to a YAML config file
     2. CONFIG_JSON env var - JSON string with full configuration
-    
+
     Raises:
         ValueError: If no valid configuration is found
     """
@@ -205,12 +209,12 @@ def load_config() -> Config:
         if not Path(config_file).exists():
             raise ValueError(f"CONFIG_FILE not found: {config_file}")
         return Config.from_yaml_file(config_file)
-    
+
     # Try CONFIG_JSON
     config_json = os.getenv("CONFIG_JSON")
     if config_json:
         return Config.from_json_string(config_json)
-    
+
     # No configuration provided
     raise ValueError(
         "No configuration found. Set CONFIG_FILE (path to YAML config) "

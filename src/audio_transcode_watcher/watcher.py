@@ -71,7 +71,7 @@ class AudioSyncHandler(FileSystemEventHandler):
 
         process_source_file(path, self.config, force=force, check_stable=True)
         self._mark_processed(path)
-    
+
     def on_created(self, event) -> None:
         """Handle file creation (audio or sidecar)."""
         if event.is_directory:
@@ -81,7 +81,7 @@ class AudioSyncHandler(FileSystemEventHandler):
             sync_sidecars(event.src_path, self.config)
         else:
             self._process_later(event.src_path, force=False)
-    
+
     def on_modified(self, event) -> None:
         """Handle file modification (audio or sidecar)."""
         if event.is_directory:
@@ -100,7 +100,7 @@ class AudioSyncHandler(FileSystemEventHandler):
                 return
             delete_outputs(event.src_path, self.config)
             self._process_later(event.src_path, force=True)
-    
+
     def _handle_directory_delete(self, dir_path: str) -> None:
         """Clean up mirrored output subtrees when a source directory is removed."""
         if safety_guard_active(self.config):
@@ -135,7 +135,9 @@ class AudioSyncHandler(FileSystemEventHandler):
             ).start()
             return
 
-        if has_sidecar_extension(event.src_path) or has_sidecar_extension(event.dest_path):
+        if has_sidecar_extension(event.src_path) or has_sidecar_extension(
+            event.dest_path
+        ):
             if has_sidecar_extension(event.src_path):
                 delete_sidecars(event.src_path, self.config)
             if has_sidecar_extension(event.dest_path):
@@ -161,7 +163,7 @@ class AudioSyncHandler(FileSystemEventHandler):
 def start_watcher(config: Config) -> Observer:
     """
     Start the file system watcher.
-    
+
     Returns the observer instance (call observer.stop() to stop).
     """
     observer = Observer()

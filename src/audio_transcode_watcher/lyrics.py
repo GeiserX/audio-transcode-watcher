@@ -10,14 +10,16 @@ from pathlib import Path
 import mutagen
 import syncedlyrics
 
-from .utils import nfc, nfc_path
+from .utils import nfc_path
 
 logger = logging.getLogger(__name__)
 
 # A synced line: one or more [mm:ss.xx] stamps, then the text.
 _TIMED_LINE = re.compile(r"^\s*(?:\[\d{1,3}:\d{1,2}(?:[.:]\d{1,3})?\])+(.*)$")
 # A URL or a bare domain (``site.co``, ``lyrics.example.xyz``).
-_URL = re.compile(r"(https?://|www\.)\S+|\b[\w-]+(\.[\w-]+)*\.[a-z]{2,24}\b", re.IGNORECASE)
+_URL = re.compile(
+    r"(https?://|www\.)\S+|\b[\w-]+(\.[\w-]+)*\.[a-z]{2,24}\b", re.IGNORECASE
+)
 _TOKEN = re.compile(r"\w+|[^\w\s]+")
 
 # Fewer timed lines than this is not a usable synced lyric.
@@ -149,7 +151,7 @@ def _write_lrc(
         with open(lrc_path, "w", encoding="utf-8") as f:
             f.write(content)
     except Exception:
-        logger.error("Failed to write lyrics file: %s", lrc_path, exc_info=True)
+        logger.exception("Failed to write lyrics file: %s", lrc_path)
         return None
 
     if owner_of:

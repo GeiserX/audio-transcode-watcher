@@ -86,75 +86,82 @@ def build_ffmpeg_command(
 ) -> list[str]:
     """
     Build an FFmpeg command for transcoding.
-    
+
     Args:
         source: Path to source audio file
         dest: Path to destination file
         output_config: Output configuration
-    
+
     Returns:
         FFmpeg command as list of arguments
     """
     source = nfc_path(source)
     dest = nfc_path(dest)
-    
+
     # Common arguments
     # -err_detect crccheck+explode makes the decoder verify each frame's
     # checksum and stop on a mismatch. Without it ffmpeg 7.1 (the image's)
     # decodes a FLAC with one flipped bit silently.
     cmd = [
-        "ffmpeg", "-loglevel", "error", "-xerror", "-y",
-        "-err_detect", "crccheck+explode",
-        "-i", source,
-        "-map", "0:a:0",  # First audio stream
+        "ffmpeg",
+        "-loglevel",
+        "error",
+        "-xerror",
+        "-y",
+        "-err_detect",
+        "crccheck+explode",
+        "-i",
+        source,
+        "-map",
+        "0:a:0",  # First audio stream
     ]
-    
+
     # Add video/artwork mapping if enabled
     if output_config.include_artwork:
         cmd.extend(["-map", "0:v:0?"])  # First video/image stream (optional)
-    
+
     # Copy metadata
     cmd.extend(["-map_metadata", "0"])
-    
+
     # Codec-specific options
     codec = output_config.codec
-    
+
     if codec == "alac":
         cmd.extend(["-c:a", "alac"])
         if output_config.include_artwork:
             cmd.extend(["-c:v", "copy"])
         # Ensure album_artist is mapped correctly for M4A (aART tag)
         cmd.extend(["-movflags", "+faststart", "-f", "mp4"])
-    
+
     elif codec == "aac":
         cmd.extend(["-c:a", "aac", "-b:a", output_config.bitrate])
         if output_config.include_artwork:
             cmd.extend(["-c:v", "copy"])
         cmd.extend(["-movflags", "+faststart", "-f", "mp4"])
-    
+
     elif codec == "mp3":
         cmd.extend(["-c:a", "libmp3lame", "-b:a", output_config.bitrate])
         if output_config.include_artwork:
             # MP3 needs mjpeg for ID3 APIC artwork
             cmd.extend(["-c:v", "mjpeg"])
         cmd.extend(["-id3v2_version", "3", "-write_id3v2", "1", "-f", "mp3"])
-    
+
     elif codec == "opus":
         cmd.extend(["-c:a", "libopus", "-b:a", output_config.bitrate])
         cmd.extend(["-f", "opus"])
-    
+
     elif codec == "flac":
         cmd.extend(["-c:a", "flac"])
         if output_config.include_artwork:
             cmd.extend(["-c:v", "copy"])
         cmd.extend(["-f", "flac"])
-    
+
     elif codec == "wav":
         cmd.extend(["-c:a", "pcm_s16le", "-f", "wav"])
-    
+
     else:
         raise ValueError(f"Unsupported codec: {codec}")
-    
+
     cmd.append(dest)
     return cmd
 
@@ -162,33 +169,33 @@ def build_ffmpeg_command(
 def _remove_artwork_from_command(cmd: list[str]) -> list[str]:
     """
     Remove artwork-related options from an FFmpeg command.
-    
+
     Used for retry when artwork encoding fails.
     """
     filtered = []
     i = 0
-    
+
     while i < len(cmd):
         arg = cmd[i]
-        
+
         # Skip -map 0:v:0? pair
         if arg == "-map" and i + 1 < len(cmd) and cmd[i + 1] == "0:v:0?":
             i += 2
             continue
-        
+
         # Skip -c:v and its value
         if arg == "-c:v":
             i += 2
             continue
-        
+
         # Skip -vf and its value
         if arg.startswith("-vf"):
             i += 2
             continue
-        
+
         filtered.append(arg)
         i += 1
-    
+
     return filtered
 
 
@@ -196,7 +203,7 @@ def _source_from_cmd(cmd: list[str]) -> str:
     """Return the input file of an ffmpeg command, for log lines."""
     try:
         return cmd[cmd.index("-i") + 1]
-    except (ValueError, IndexError):
+    except ValueError, IndexError:
         return "?"
 
 
@@ -218,7 +225,9 @@ def _is_artwork_error(stderr: str) -> bool:
 def _run_ffmpeg(cmd: list[str]) -> tuple[int, str]:
     """Run ffmpeg; a decode error on stderr counts as a failure even with rc 0."""
     try:
-        proc = subprocess.run(cmd, capture_output=True, timeout=FFMPEG_TIMEOUT)
+        proc = subprocess.run(
+            cmd, capture_output=True, timeout=FFMPEG_TIMEOUT, check=False
+        )
     except subprocess.TimeoutExpired:
         return TIMEOUT_RC, f"ffmpeg timed out after {FFMPEG_TIMEOUT} s"
     stderr = proc.stderr.decode("utf-8", errors="ignore") if proc.stderr else ""
@@ -236,7 +245,7 @@ def atomic_ffmpeg_encode(
 ) -> int:
     """
     Run FFmpeg with atomic output (write to temp, then rename).
-    
+
     Args:
         cmd: FFmpeg command (last element is destination)
         final_dest: Final destination path
@@ -244,31 +253,31 @@ def atomic_ffmpeg_encode(
             failure points at the attached picture stream
         finalize: Optional callable run on the finished temp file before
             the rename (used to copy extra tags)
-    
+
     Returns:
         Return code (0 for success). No output is written on failure.
     """
     final_dest = nfc_path(final_dest)
     dest_dir = os.path.dirname(final_dest)
     os.makedirs(dest_dir, exist_ok=True)
-    
+
     tmp_dest = final_dest + ".tmp__ff"
-    
+
     # Clean up any stale temp file
     try:
         if os.path.exists(tmp_dest):
             os.remove(tmp_dest)
     except Exception:
         pass
-    
+
     # Replace destination with temp path
     cmd = list(cmd)
     cmd[-1] = tmp_dest
     source = _source_from_cmd(cmd)
-    
+
     logger.info("► %s", " ".join(cmd))
     rc, stderr = _run_ffmpeg(cmd)
-    
+
     if rc != 0 and retry_without_artwork and _is_artwork_error(stderr):
         _cleanup_temp(tmp_dest)
         logger.warning("Retrying without cover art for %s", final_dest)
@@ -276,7 +285,7 @@ def atomic_ffmpeg_encode(
         cmd[-1] = tmp_dest
         logger.info("► (retry) %s", " ".join(cmd))
         rc, stderr = _run_ffmpeg(cmd)
-    
+
     if rc != 0:
         detail = _decode_error(stderr) or (stderr.strip().splitlines() or [""])[-1]
         logger.error(
@@ -284,13 +293,13 @@ def atomic_ffmpeg_encode(
         )
         _cleanup_temp(tmp_dest)
         return rc
-    
+
     if finalize is not None:
         try:
             finalize(tmp_dest)
         except Exception as e:
             logger.warning("Post-encode step failed for %s: %s", final_dest, e)
-    
+
     try:
         os.replace(tmp_dest, final_dest)
         return 0
