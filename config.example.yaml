@@ -1,4 +1,4 @@
-# Audio Transcode Watcher Configuration
+# Audio Transcode Watcher Configuration (0.6.0)
 # ======================================
 #
 # This configuration file defines the source folder and output destinations
@@ -7,6 +7,9 @@
 # Mount this file into the container and set CONFIG_FILE=/app/config.yaml
 
 # Source folder containing original audio files (FLAC, WAV, etc.)
+# Lossy sources (mp3, m4a, aac, ogg, opus, wma) are copied unchanged into
+# lossless outputs, and into lossy outputs of the same codec; they are only
+# transcoded into a lossy output of another codec.
 source:
   path: /music/flac
 
@@ -46,6 +49,14 @@ settings:
   
   # Minimum time a file must be unchanged before processing (seconds)
   min_stable_seconds: 1.0
+
+  # Fetch synced .lrc lyrics online; nothing is written when none are found
+  fetch_lyrics: true
+
+  # Seconds between periodic full syncs (default: 300)
+  sync_interval_seconds: 300
+
+  # whisper_fallback and whisper_model were removed in 0.6.0 and are ignored
 
 
 # ============================================================================

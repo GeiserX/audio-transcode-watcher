@@ -165,3 +165,40 @@ class TestMain:
 
         # Should not raise -- exercises the bitrate logging branch
         assert main() == 0
+
+
+class TestConfigurableInterval:
+    """settings.sync_interval_seconds drives the periodic pass."""
+
+    @pytest.mark.parametrize("interval,elapsed,expected_calls", [(60, 61, 2), (300, 61, 1)])
+    @patch("gc.collect")
+    @patch("audio_transcode_watcher.main.start_watcher")
+    @patch("audio_transcode_watcher.main.initial_sync")
+    @patch("audio_transcode_watcher.main.load_config")
+    @patch("os.path.isdir", return_value=True)
+    def test_interval_from_config(
+        self, _isdir, mock_load, mock_sync, mock_watcher, _gc, interval, elapsed, expected_calls
+    ):
+        from audio_transcode_watcher.config import Config, OutputConfig
+
+        mock_load.return_value = Config(
+            source_path="/music/flac",
+            outputs=[OutputConfig(name="alac", codec="alac", path="/tmp/out")],
+            sync_interval_seconds=interval,
+        )
+        mock_watcher.return_value = MagicMock()
+        times = iter([0] + [elapsed] * 10)
+        sleeps = [0]
+
+        def fake_sleep(_secs):
+            sleeps[0] += 1
+            if sleeps[0] >= 2:
+                raise KeyboardInterrupt
+
+        with patch("time.time", side_effect=lambda: next(times)), \
+             patch("time.sleep", side_effect=fake_sleep):
+            main()
+
+        assert mock_sync.call_count == expected_calls
+        if expected_calls == 2:
+            assert mock_sync.call_args_list[1].kwargs == {"periodic": True}

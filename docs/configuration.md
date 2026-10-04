@@ -58,12 +58,39 @@ settings:
   # Auto-fetch synced .lrc lyrics (default: true)
   fetch_lyrics: true
 
-  # Use Whisper local transcription as fallback when no lyrics found online (default: true)
-  whisper_fallback: true
-
-  # Whisper model size: tiny, base, small, medium, large (default: base)
-  whisper_model: base
+  # Seconds between periodic full syncs (default: 300)
+  sync_interval_seconds: 300
 ```
+
+`whisper_fallback` and `whisper_model` were removed in 0.6.0 along with the Whisper lyrics fallback. A config that still sets them loads, and the first load logs one warning that they are ignored.
+
+## Source formats
+
+| Kind     | Extensions                                                         |
+|----------|--------------------------------------------------------------------|
+| Lossless | `.flac` `.alac` `.wav` `.aiff` `.aif` `.ape` `.wv` `.tta` `.tak`   |
+| Lossy    | `.mp3` `.aac` `.m4a` `.ogg` `.opus` `.wma`                         |
+
+A lossless source is encoded to every output.
+
+A lossy source is never encoded into a lossless output, because that only makes a big file that looks lossless. It is copied there unchanged, with its own extension, so an ALAC folder can hold `.m4a` encodes next to `.mp3` or `.ogg` copies. Into a lossy output it is copied unchanged when it already has that output's codec (`.mp3` into `mp3`, `.m4a` or `.aac` into `aac`, `.opus` into `opus`) and transcoded otherwise. Copies keep their tags and cover as they are.
+
+When a lossless and a lossy file share a name in the source folder, the lossless one is used for every output. If the lossy file came first and was already copied, the copy is removed and the lossless file is encoded as soon as it is processed.
+
+## Tags in ALAC and AAC outputs
+
+FFmpeg writes the standard MP4 atoms (title, artist, album and so on). After an ALAC or AAC encode, the tags FFmpeg drops are copied from the source under the names MusicBrainz Picard uses, so Picard, TagLib (Navidrome, Jellyfin), foobar2000 and iTunes all read them:
+
+| Source tag                                   | MP4 atom                                              |
+|----------------------------------------------|-------------------------------------------------------|
+| `REPLAYGAIN_TRACK_GAIN`, `_TRACK_PEAK`, `_ALBUM_GAIN`, `_ALBUM_PEAK` | `----:com.apple.iTunes:replaygain_track_gain` and so on, lowercase |
+| `MUSICBRAINZ_TRACKID`                        | `----:com.apple.iTunes:MusicBrainz Track Id`          |
+| `MUSICBRAINZ_ALBUMID`                        | `----:com.apple.iTunes:MusicBrainz Album Id`          |
+| `MUSICBRAINZ_ARTISTID`                       | `----:com.apple.iTunes:MusicBrainz Artist Id`         |
+| `MUSICBRAINZ_ALBUMARTISTID`                  | `----:com.apple.iTunes:MusicBrainz Album Artist Id`   |
+| `MUSICBRAINZ_RELEASEGROUPID`                 | `----:com.apple.iTunes:MusicBrainz Release Group Id`  |
+| `ISRC`, `LABEL`, `CATALOGNUMBER`             | `----:com.apple.iTunes:ISRC`, `LABEL`, `CATALOGNUMBER` |
+| `ARTISTSORT`, `ALBUMARTISTSORT`, `ALBUMSORT` | the standard sort atoms `soar`, `soaa`, `soal`        |
 
 ## Supported Codecs
 

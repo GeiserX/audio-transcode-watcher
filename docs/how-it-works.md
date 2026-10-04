@@ -1,13 +1,19 @@
 # How it works
 
-1. **Initial sync** -- On startup, scans the source folder and encodes any missing files to all configured outputs.
+1. **Initial sync** -- On startup, scans the source folder and encodes any missing files to all configured outputs. The same pass runs again every `sync_interval_seconds` (default 300) and logs as "Periodic sync".
 2. **Watch mode** -- Continuously monitors the source folder for changes:
    - **New files** are encoded to all configured outputs
    - **Modified files** are re-encoded to all outputs
    - **Renamed files** trigger deletion of old outputs and creation of new ones
    - **Deleted files** have their corresponding outputs removed
-3. **Orphan cleanup** -- Removes output files that no longer have a matching source.
-4. **Lyrics sync** -- Fetches synced `.lrc` lyrics from online databases; falls back to Whisper transcription when no lyrics are found.
+3. **Orphan cleanup** -- Removes output files that no longer have a matching source. It reads the source folder again just before, and skips any file younger than 120 seconds or whose source is being processed, so a file that arrives during a long sync keeps its output.
+4. **Lyrics sync** -- Fetches synced `.lrc` lyrics from online databases (LRCLIB and the other syncedlyrics providers). When nothing usable comes back, no file is written. A result made of one repeated token, with fewer than 4 timed lines, or with only an advertisement line is rejected and the reason is logged. The `.lrc` gets the source file's owner and mode 0664.
+
+Lossy sources are copied rather than encoded where that keeps quality honest; see [Source formats](configuration.md#source-formats).
+
+## Corrupt sources
+
+FFmpeg runs with `-xerror` and `-err_detect crccheck+explode`, so a frame whose checksum does not match stops the encode. If a source does not decode cleanly, the encode fails even when FFmpeg exits 0 but printed a decode error. The error is logged with the file name and no output is written. The file is not tried again until its modification time changes, or the service restarts.
 
 ## Recursive Directory Support
 
@@ -35,7 +41,8 @@ The service includes multiple guards to prevent data loss:
 
 - If the source folder appears empty, no deletions are performed
 - If any output folder appears empty, no deletions are performed
-- All writes are atomic -- encoding happens to a temporary file that is moved into place only on success
+- All writes are atomic -- encoding and copying happen to a `.tmp__ff` file that is moved into place only on success
+- Cleanup leaves `.tmp__ff` files younger than 10 minutes alone, since they may belong to an encode still running
 
 ## Performance
 

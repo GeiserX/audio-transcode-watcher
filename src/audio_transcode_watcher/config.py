@@ -3,12 +3,23 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+logger = logging.getLogger(__name__)
+
+# Settings that older releases read and this one ignores. A config that
+# still sets them loads fine; the first load logs one warning.
+DEPRECATED_SETTINGS = {
+    "whisper_fallback": "the Whisper lyrics fallback was removed in 0.6.0",
+    "whisper_model": "the Whisper lyrics fallback was removed in 0.6.0",
+}
+_deprecation_warned = False
 
 
 # Codec to file extension mapping
@@ -94,13 +105,16 @@ class Config:
     stability_timeout: float = 60.0
     min_stable_seconds: float = 1.0
     fetch_lyrics: bool = True  # Auto-fetch .lrc lyrics via syncedlyrics
-    whisper_fallback: bool = True  # Use Whisper local transcription as fallback
-    whisper_model: str = "base"  # Whisper model size: tiny, base, small, medium, large
+    sync_interval_seconds: int = 300  # Seconds between periodic full syncs
     
     def __post_init__(self) -> None:
         """Validate configuration after initialization."""
         if not self.source_path:
             raise ValueError("source_path is required")
+
+        interval = self.sync_interval_seconds
+        if isinstance(interval, bool) or not isinstance(interval, (int, float)) or interval <= 0:
+            raise ValueError("sync_interval_seconds must be a number greater than 0")
         
         if not self.outputs:
             raise ValueError("At least one output is required")
@@ -132,6 +146,7 @@ class Config:
         """Create Config from a dictionary."""
         outputs = [OutputConfig.from_dict(o) for o in data.get("outputs", [])]
         settings = data.get("settings", {})
+        _warn_deprecated_settings(settings)
         
         return cls(
             source_path=data.get("source", {}).get("path", ""),
@@ -142,8 +157,7 @@ class Config:
             stability_timeout=settings.get("stability_timeout", 60.0),
             min_stable_seconds=settings.get("min_stable_seconds", 1.0),
             fetch_lyrics=settings.get("fetch_lyrics", True),
-            whisper_fallback=settings.get("whisper_fallback", True),
-            whisper_model=settings.get("whisper_model", "base"),
+            sync_interval_seconds=settings.get("sync_interval_seconds", 300),
         )
     
     @classmethod
@@ -158,6 +172,20 @@ class Config:
         """Load configuration from a JSON string."""
         data = json.loads(json_str)
         return cls.from_dict(data)
+
+
+def _warn_deprecated_settings(settings: dict[str, Any]) -> None:
+    """Log one warning per process for settings that are accepted but ignored."""
+    global _deprecation_warned
+    found = sorted(k for k in DEPRECATED_SETTINGS if k in settings)
+    if not found or _deprecation_warned:
+        return
+    _deprecation_warned = True
+    logger.warning(
+        "Ignoring deprecated settings %s: %s. Remove them from your config.",
+        ", ".join(found),
+        DEPRECATED_SETTINGS[found[0]],
+    )
 
 
 def load_config() -> Config:

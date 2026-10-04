@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import filecmp
 import logging
 import os
 import shutil
@@ -11,17 +12,21 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from .config import Config, OutputConfig
-from .encoder import atomic_ffmpeg_encode, build_ffmpeg_command
+from .encoder import atomic_ffmpeg_encode, build_ffmpeg_command, copy_mp4_tags
 from .lyrics import fetch_lyrics_for_file
 from .utils import (
+    AUDIO_EXTENSIONS,
     LOSSLESS_EXTENSIONS,
+    LOSSY_EXTENSIONS,
     SIDECAR_EXTENSIONS,
     appears_empty_dir,
     get_output_file_path,
     get_output_filename,
     get_rel_stem,
+    has_audio_extension,
     is_audio_file,
-    is_mp3,
+    is_lossless,
+    lossy_source_codec,
     nfc,
     nfc_path,
     remove_empty_dirs,
@@ -37,6 +42,22 @@ logger = logging.getLogger(__name__)
 # Global state for tracking in-progress files
 _in_progress: set[str] = set()
 _in_progress_lock = threading.Lock()
+
+# Sources whose encode failed, with the mtime they had then. A source in
+# here is skipped until its mtime changes (lives for the process lifetime).
+_failed_sources: dict[str, float] = {}
+_failed_lock = threading.Lock()
+
+# The orphan pass leaves alone anything younger than this (seconds), so a
+# file the watcher just encoded is never removed by a sync that started
+# before it arrived.
+ORPHAN_MIN_AGE = 120.0
+
+# A .tmp__ff file younger than this (seconds) may be an encode in progress.
+TEMP_MIN_AGE = 600.0
+
+# Output codecs whose files are MP4 and take the extra MP4 tags.
+_MP4_CODECS = {"alac", "aac"}
 
 # Safety guard logging throttle
 _last_safety_log_ts = 0.0
@@ -115,6 +136,10 @@ def process_source_file(
         logger.warning("Source not stable or disappeared: %s", source_path)
         return
     
+    if _is_known_failure(source_path):
+        logger.debug("Skipping %s: it failed before and has not changed", source_path)
+        return
+
     # Prevent duplicate concurrent processing
     with _in_progress_lock:
         if source_path in _in_progress:
@@ -122,21 +147,44 @@ def process_source_file(
         _in_progress.add(source_path)
     
     try:
-        _process_outputs(source_path, config, force)
+        if not _process_outputs(source_path, config, force):
+            _remember_failure(source_path)
         # Auto-fetch lyrics if enabled and no .lrc sidecar exists
         if config.fetch_lyrics:
             try:
-                fetch_lyrics_for_file(
-                    source_path,
-                    whisper_fallback=config.whisper_fallback,
-                    whisper_model=config.whisper_model,
-                )
+                fetch_lyrics_for_file(source_path)
             except Exception:
                 logger.debug("Lyrics fetch failed for %s", source_path, exc_info=True)
         sync_sidecars(source_path, config)
     finally:
         with _in_progress_lock:
             _in_progress.discard(source_path)
+
+
+def _is_known_failure(source_path: str) -> bool:
+    """True if *source_path* failed before and its mtime has not changed since."""
+    try:
+        mtime = os.path.getmtime(source_path)
+    except OSError:
+        return False
+    with _failed_lock:
+        recorded = _failed_sources.get(source_path)
+        if recorded is None:
+            return False
+        if recorded == mtime:
+            return True
+        del _failed_sources[source_path]
+        return False
+
+
+def _remember_failure(source_path: str) -> None:
+    """Remember that *source_path* failed, until its mtime changes."""
+    try:
+        mtime = os.path.getmtime(source_path)
+    except OSError:
+        return
+    with _failed_lock:
+        _failed_sources[source_path] = mtime
 
 
 def _has_lossless_source(source_path: str, config: Config) -> bool:
@@ -151,51 +199,140 @@ def _has_lossless_source(source_path: str, config: Config) -> bool:
     return False
 
 
-def _process_outputs(source_path: str, config: Config, force: bool) -> None:
-    """Process all outputs for a source file."""
-    source_is_mp3 = is_mp3(source_path)
+def _lossy_siblings(source_path: str) -> list[str]:
+    """Lossy sources with the same stem as *source_path*, in its folder."""
+    stem = Path(source_path).stem
+    source_dir = os.path.dirname(source_path)
+    siblings = []
+    for ext in sorted(LOSSY_EXTENSIONS):
+        other = nfc_path(os.path.join(source_dir, f"{stem}{ext}"))
+        if other != source_path and os.path.isfile(other):
+            siblings.append(other)
+    return siblings
 
+
+def _remove_lossy_copies(
+    source_path: str, siblings: list[str], output: OutputConfig, config: Config
+) -> None:
+    """
+    Remove copies of *siblings* from *output*: the lossless *source_path* wins.
+
+    A copy under a different name (``X.mp3`` beside the ``X.m4a`` encode)
+    always goes. A copy under the encode's own name (``X.m4a`` copied before
+    ``X.flac`` arrived) goes only while it is still byte-identical to the
+    lossy source, so a finished encode is never thrown away.
+    """
+    own_name, _ = plan_output(source_path, output)
+    own_path = get_output_file_path(source_path, config.source_path, output.path, own_name)
+    for sibling in siblings:
+        name, action = plan_output(sibling, output)
+        if action != "copy":
+            continue
+        copy_path = get_output_file_path(sibling, config.source_path, output.path, name)
+        try:
+            if not os.path.exists(copy_path):
+                continue
+            if copy_path == own_path and not filecmp.cmp(sibling, copy_path, shallow=True):
+                continue
+            logger.info("✘ remove lossy copy %s (lossless %s wins)", copy_path, source_path)
+            os.remove(copy_path)
+        except OSError as e:
+            logger.error("Failed to remove lossy copy %s: %s", copy_path, e)
+
+
+def _has_other_source(source_path: str) -> bool:
+    """Check if another audio source with the same stem exists."""
+    stem = Path(source_path).stem
+    source_dir = os.path.dirname(source_path)
+    for ext in AUDIO_EXTENSIONS:
+        other = nfc_path(os.path.join(source_dir, f"{stem}{ext}"))
+        if other != source_path and os.path.exists(other):
+            return True
+    return False
+
+
+def plan_output(source_path: str, output: OutputConfig) -> tuple[str, str]:
+    """
+    Decide how *source_path* lands in *output*.
+
+    Returns ``(filename, action)`` where action is ``"copy"`` or ``"encode"``:
+
+    - a lossless source is encoded to the output codec;
+    - a lossy source is copied unchanged (same extension) into a lossless
+      output, since encoding it would only inflate it;
+    - a lossy source is copied unchanged into a lossy output of the same
+      codec, and transcoded into a lossy output of another codec.
+    """
+    if not is_lossless(source_path):
+        if output.is_lossless or lossy_source_codec(source_path) == output.codec:
+            return nfc(os.path.basename(source_path)), "copy"
+    return get_output_filename(source_path, output.extension), "encode"
+
+
+def _atomic_copy(source_path: str, out_path: str) -> bool:
+    """Copy a file through a temp name, so a partial copy is never visible."""
+    tmp = out_path + ".tmp__ff"
+    logger.info("► copy %s → %s", source_path, out_path)
+    try:
+        shutil.copy2(source_path, tmp)
+        os.replace(tmp, out_path)
+        return True
+    except Exception as e:
+        logger.error("Copy failed %s → %s: %s", source_path, out_path, e)
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except OSError:
+            pass
+        return False
+
+
+def _process_outputs(source_path: str, config: Config, force: bool) -> bool:
+    """
+    Process all outputs for a source file.
+
+    Returns False if an encode failed, True otherwise.
+    """
+    if not is_lossless(source_path) and _has_lossless_source(source_path, config):
+        logger.debug("Skipping lossy %s - lossless source exists", source_path)
+        return True
+
+    siblings = _lossy_siblings(source_path) if is_lossless(source_path) else []
+
+    ok = True
     for output in config.outputs:
         if safety_guard_active(config):
-            return
+            return ok
 
-        # Determine output filename
-        if source_is_mp3 and output.codec == "alac":
-            # Skip MP3 if a lossless source with the same stem exists
-            if _has_lossless_source(source_path, config):
-                logger.debug("Skipping MP3 %s - lossless source exists", source_path)
-                continue
+        out_filename, action = plan_output(source_path, output)
+        out_path = get_output_file_path(
+            source_path, config.source_path, output.path, out_filename,
+        )
+        if siblings:
+            _remove_lossy_copies(source_path, siblings, output, config)
+        if not force and os.path.exists(out_path):
+            continue
 
-            # Special case: copy MP3 to ALAC folder unchanged
-            out_filename = os.path.basename(source_path)
-            out_path = get_output_file_path(
-                source_path, config.source_path, output.path, out_filename,
+        os.makedirs(os.path.dirname(out_path), exist_ok=True)
+        if action == "copy":
+            _atomic_copy(source_path, out_path)
+            continue
+
+        finalize = None
+        if output.codec in _MP4_CODECS:
+            def finalize(tmp: str, src: str = source_path) -> None:
+                copy_mp4_tags(src, tmp)
+
+        cmd = build_ffmpeg_command(source_path, out_path, output)
+        rc = atomic_ffmpeg_encode(cmd, out_path, finalize=finalize)
+        if rc != 0:
+            logger.error(
+                "%s encode failed for %s",
+                output.name.upper(),
+                source_path,
             )
-
-            if force or not os.path.exists(out_path):
-                logger.info("► copy %s → %s", source_path, out_path)
-                os.makedirs(os.path.dirname(out_path), exist_ok=True)
-                try:
-                    shutil.copy2(source_path, out_path)
-                except Exception as e:
-                    logger.error("Copy failed %s → %s: %s", source_path, out_path, e)
-        else:
-            # Transcode
-            out_filename = get_output_filename(source_path, output.extension)
-            out_path = get_output_file_path(
-                source_path, config.source_path, output.path, out_filename,
-            )
-
-            if force or not os.path.exists(out_path):
-                os.makedirs(os.path.dirname(out_path), exist_ok=True)
-                cmd = build_ffmpeg_command(source_path, out_path, output)
-                rc = atomic_ffmpeg_encode(cmd, out_path)
-                if rc != 0:
-                    logger.error(
-                        "%s encode failed for %s",
-                        output.name.upper(),
-                        source_path,
-                    )
+            ok = False
+    return ok
 
 
 def delete_outputs(source_path: str, config: Config) -> None:
@@ -209,35 +346,33 @@ def delete_outputs(source_path: str, config: Config) -> None:
     if safety_guard_active(config):
         return
 
-    stem = nfc(Path(source_path).stem)
-    source_basename = os.path.basename(source_path)
-    source_is_mp3 = is_mp3(source_path)
+    lossless_sibling = (
+        not is_lossless(source_path) and _has_lossless_source(source_path, config)
+    )
 
     for output in config.outputs:
-        filenames_to_check: list[str] = []
+        filename, _action = plan_output(source_path, output)
+        # With a lossless source of the same stem, a file of the same name
+        # in this output belongs to that source; keep it.
+        if lossless_sibling and filename == get_output_filename(
+            source_path, output.extension
+        ):
+            continue
 
-        if source_is_mp3:
-            if output.codec == "alac":
-                filenames_to_check = [source_basename]
-            else:
-                if not _has_lossless_source(source_path, config):
-                    filenames_to_check = [f"{stem}{output.extension}"]
-        else:
-            filenames_to_check = [f"{stem}{output.extension}"]
+        filepath = get_output_file_path(
+            source_path, config.source_path, output.path, filename,
+        )
+        if os.path.exists(filepath):
+            try:
+                logger.info("✘ remove %s", filepath)
+                os.remove(filepath)
+            except Exception as e:
+                logger.error("Failed to remove %s: %s", filepath, e)
 
-        for filename in filenames_to_check:
-            filepath = get_output_file_path(
-                source_path, config.source_path, output.path, filename,
-            )
-            if os.path.exists(filepath):
-                try:
-                    logger.info("✘ remove %s", filepath)
-                    os.remove(filepath)
-                except Exception as e:
-                    logger.error("Failed to remove %s: %s", filepath, e)
-
-    # Also remove sidecar files from all outputs
-    delete_sidecars(source_path, config)
+    # Sidecars are shared by every source of the stem; remove them only
+    # when no other source of the stem remains.
+    if not _has_other_source(source_path):
+        delete_sidecars(source_path, config)
 
     # Clean up empty subdirectories left after deletions
     for output in config.outputs:
@@ -301,11 +436,13 @@ def cleanup_stale_temp_files(config: Config) -> int:
     Remove stale temporary files from interrupted encodes.
 
     These files have the .tmp__ff suffix and are left behind when
-    ffmpeg is interrupted (e.g., container restart, crash).
+    ffmpeg is interrupted (e.g., container restart, crash). Files younger
+    than TEMP_MIN_AGE are skipped: they may be an encode still running.
 
     Returns the number of files cleaned up.
     """
     cleaned = 0
+    now = time.time()
     for output in config.outputs:
         try:
             if not os.path.exists(output.path):
@@ -315,6 +452,9 @@ def cleanup_stale_temp_files(config: Config) -> int:
                     if fname.endswith(".tmp__ff"):
                         full = os.path.join(dirpath, fname)
                         try:
+                            if now - os.path.getmtime(full) < TEMP_MIN_AGE:
+                                logger.debug("Keeping young temp file %s", full)
+                                continue
                             logger.info("✘ cleanup stale temp %s", full)
                             os.remove(full)
                             cleaned += 1
@@ -351,15 +491,17 @@ def purge_all_outputs(config: Config) -> None:
             logger.error("Failed to purge folder %s: %s", output.path, e)
 
 
-def initial_sync(config: Config) -> None:
+def initial_sync(config: Config, periodic: bool = False) -> None:
     """
-    Perform initial synchronization of source to all outputs.
+    Synchronize the source to all outputs (at startup and periodically).
 
     - Cleans up stale temp files from interrupted encodes
     - Creates output directories
     - Encodes missing files (recursively)
     - Removes orphaned files from outputs
     """
+    label = "Periodic sync" if periodic else "Initial sync"
+
     # Create output directories
     for output in config.outputs:
         os.makedirs(output.path, exist_ok=True)
@@ -369,16 +511,16 @@ def initial_sync(config: Config) -> None:
     if cleaned > 0:
         logger.info("Cleaned up %d stale temp files from interrupted encodes.", cleaned)
 
-    # Purge if force_reencode is enabled
-    if config.force_reencode:
+    # Purge if force_reencode is enabled (startup only)
+    if config.force_reencode and not periodic:
         logger.info("FORCE_REENCODE enabled. Purging all outputs.")
         purge_all_outputs(config)
 
     if safety_guard_active(config):
-        logger.info("Initial sync skipped due to safety guard.")
+        logger.info("%s skipped due to safety guard.", label)
         return
 
-    logger.info("Initial sync …")
+    logger.info("%s …", label)
 
     # Collect source files recursively
     try:
@@ -386,9 +528,6 @@ def initial_sync(config: Config) -> None:
     except Exception as e:
         logger.error("Failed to scan source: %s", e)
         return
-
-    # Get relative stems for orphan detection (preserves directory structure)
-    source_rel_stems = {get_rel_stem(f, config.source_path) for f in source_files}
 
     # Process all source files in parallel (skip stability check - files are on disk)
     workers = getattr(config, 'parallel_workers', DEFAULT_PARALLEL_WORKERS)
@@ -408,85 +547,105 @@ def initial_sync(config: Config) -> None:
     # Remove orphans
     if safety_guard_active(config):
         logger.info("Skipping orphan cleanup due to safety guard.")
-        logger.info("Initial sync complete (partial).")
+        logger.info("%s complete (partial).", label)
         return
 
-    if not source_rel_stems:
+    if not source_files:
         logger.warning("No source files found; skipping orphan cleanup to avoid wiping outputs.")
     else:
-        _cleanup_orphans(config, source_rel_stems)
-    logger.info("Initial sync complete.")
+        _cleanup_orphans(config)
+    logger.info("%s complete.", label)
 
 
-def _cleanup_orphans(config: Config, source_rel_stems: set[str]) -> None:
+def _age_seconds(path: str, now: float) -> float:
+    """Seconds since *path* was last written or created (mtime or ctime)."""
+    st = os.stat(path)
+    return now - max(st.st_mtime, st.st_ctime)
+
+
+def _cleanup_orphans(config: Config) -> None:
     """Remove output files that no longer have a source.
 
-    *source_rel_stems* contains relative stems (e.g. ``"album/song"``)
-    so that nested directory structures are handled correctly.
+    The source is walked again here, not reused from the start of the sync,
+    so a file that arrived during a long sync is known. Anything younger
+    than ORPHAN_MIN_AGE, or whose stem is being processed, is left alone.
+
+    An output may hold several files for one stem (an ALAC output holds
+    ``.m4a`` encodes and unchanged lossy copies such as ``.mp3``), so the
+    expected files are computed per source with plan_output().
     """
-    # Build a set of rel_stems that have lossless sources
-    lossless_rel_stems: set[str] = set()
+    src_root = config.source_path
     try:
-        for dirpath, _dirnames, filenames in os.walk(config.source_path):
-            for fname in filenames:
-                ext = Path(fname).suffix.lower()
-                if ext in LOSSLESS_EXTENSIONS:
-                    full = os.path.join(dirpath, fname)
-                    lossless_rel_stems.add(get_rel_stem(full, config.source_path))
-    except Exception:
-        logger.debug("Failed to enumerate lossless sources for orphan cleanup", exc_info=True)
+        source_files = walk_audio_files(src_root)
+    except Exception as e:
+        logger.error("Failed to scan source for orphan cleanup: %s", e)
+        return
+    if not source_files:
+        logger.warning("No source files found; skipping orphan cleanup to avoid wiping outputs.")
+        return
+
+    now = time.time()
+    source_stems: set[str] = set()
+    lossless_stems: set[str] = set()
+    young_stems: set[str] = set()
+    for f in source_files:
+        stem = get_rel_stem(f, src_root)
+        source_stems.add(stem)
+        if is_lossless(f):
+            lossless_stems.add(stem)
+        try:
+            if _age_seconds(f, now) < ORPHAN_MIN_AGE:
+                young_stems.add(stem)
+        except OSError:
+            young_stems.add(stem)
+    with _in_progress_lock:
+        in_progress = list(_in_progress)
+    young_stems.update(get_rel_stem(p, src_root) for p in in_progress)
+
+    def keep_young(full: str, rel_stem: str) -> bool:
+        if rel_stem in young_stems:
+            return True
+        try:
+            return _age_seconds(full, now) < ORPHAN_MIN_AGE
+        except OSError:
+            return True
+
+    def remove(full: str, kind: str) -> None:
+        try:
+            logger.info("✘ remove %s %s", kind, full)
+            os.remove(full)
+        except Exception as e:
+            logger.error("Failed to remove %s: %s", full, e)
 
     for output in config.outputs:
-        # Valid extensions for this output
-        if output.codec == "alac":
-            valid_extensions = (".m4a", ".mp3")
-        else:
-            valid_extensions = (output.extension,)
+        expected: set[str] = set()
+        for f in source_files:
+            if not is_lossless(f) and get_rel_stem(f, src_root) in lossless_stems:
+                continue  # the lossless source of this stem wins
+            filename, _action = plan_output(f, output)
+            expected.add(get_output_file_path(f, src_root, output.path, filename))
 
         try:
             for dirpath, _dirnames, filenames in os.walk(output.path):
                 for fname in filenames:
-                    if not fname.endswith(valid_extensions):
+                    full = os.path.join(dirpath, fname)
+                    if has_audio_extension(full):
+                        if nfc_path(full) in expected:
+                            continue
+                        kind = "orphan"
+                    elif fname.lower().endswith(tuple(SIDECAR_EXTENSIONS)):
+                        if get_rel_stem(full, output.path) in source_stems:
+                            continue
+                        kind = "orphan sidecar"
+                    else:
                         continue
 
-                    full = os.path.join(dirpath, fname)
-                    rel_stem = get_rel_stem(full, output.path)
-                    is_orphan = rel_stem not in source_rel_stems
-
-                    # Special case: MP3 in ALAC folder is orphan if lossless source exists
-                    if output.codec == "alac" and fname.endswith(".mp3"):
-                        if rel_stem in lossless_rel_stems:
-                            is_orphan = True
-
-                    if is_orphan:
-                        filepath = nfc_path(full)
-                        try:
-                            logger.info("✘ remove orphan %s", filepath)
-                            os.remove(filepath)
-                        except Exception as e:
-                            logger.error("Failed to remove %s: %s", filepath, e)
+                    if keep_young(full, get_rel_stem(full, output.path)):
+                        logger.debug("Keeping young or in-progress %s", full)
+                        continue
+                    remove(full, kind)
         except Exception as e:
             logger.error("Failed to scan %s for orphans: %s", output.path, e)
-
-    # Clean up orphaned sidecar files in output directories
-    sidecar_exts = tuple(SIDECAR_EXTENSIONS)
-    for output in config.outputs:
-        try:
-            for dirpath, _dirnames, filenames in os.walk(output.path):
-                for fname in filenames:
-                    if not fname.lower().endswith(sidecar_exts):
-                        continue
-                    full = os.path.join(dirpath, fname)
-                    rel_stem = get_rel_stem(full, output.path)
-                    if rel_stem not in source_rel_stems:
-                        filepath = nfc_path(full)
-                        try:
-                            logger.info("✘ remove orphan sidecar %s", filepath)
-                            os.remove(filepath)
-                        except Exception as e:
-                            logger.error("Failed to remove sidecar %s: %s", filepath, e)
-        except Exception as e:
-            logger.error("Failed to scan %s for orphan sidecars: %s", output.path, e)
 
     # Remove empty subdirectories left after orphan cleanup
     for output in config.outputs:
