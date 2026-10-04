@@ -5,11 +5,70 @@ from __future__ import annotations
 import logging
 import os
 import subprocess
+from collections.abc import Callable
+
+import mutagen
+from mutagen.apev2 import APETextValue
+from mutagen.mp4 import MP4, MP4FreeForm
 
 from .config import OutputConfig
 from .utils import nfc_path
 
 logger = logging.getLogger(__name__)
+
+# Exit code returned when ffmpeg exits 0 but reported a decode error.
+DECODE_ERROR_RC = 69
+
+# stderr text that means the audio did not decode cleanly, even when
+# ffmpeg exits 0 (a corrupt FLAC used to come out seconds short).
+_DECODE_ERROR_HINTS = ("decode_frame() failed", "invalid", "error while decoding")
+
+# stderr text that points at the attached picture (cover art) stream.
+# Only these trigger the retry without artwork.
+_ARTWORK_ERROR_HINTS = (
+    "could not find tag for codec",
+    "attached pic",
+    "video stream",
+    "mjpeg",
+    "png",
+    "vist#",
+    "vf#",
+)
+
+# Tags the standard MP4 atoms cannot hold, copied after an ALAC or AAC
+# encode as iTunes freeform atoms ``----:com.apple.iTunes:<NAME>``.
+FREEFORM_TAGS = (
+    "REPLAYGAIN_TRACK_GAIN",
+    "REPLAYGAIN_TRACK_PEAK",
+    "REPLAYGAIN_ALBUM_GAIN",
+    "REPLAYGAIN_ALBUM_PEAK",
+    "MUSICBRAINZ_TRACKID",
+    "MUSICBRAINZ_ALBUMID",
+    "MUSICBRAINZ_ARTISTID",
+    "MUSICBRAINZ_ALBUMARTISTID",
+    "MUSICBRAINZ_RELEASEGROUPID",
+    "ISRC",
+    "LABEL",
+    "CATALOGNUMBER",
+    "ARTISTSORT",
+    "ALBUMARTISTSORT",
+    "ALBUMSORT",
+)
+
+# How the same tags are stored in ID3 (WAV, AIFF and MP3 sources).
+_ID3_FRAMES = {
+    "ISRC": "TSRC",
+    "LABEL": "TPUB",
+    "ARTISTSORT": "TSOP",
+    "ALBUMARTISTSORT": "TSO2",
+    "ALBUMSORT": "TSOA",
+}
+_ID3_TXXX = {
+    "MUSICBRAINZ_ALBUMID": "MusicBrainz Album Id",
+    "MUSICBRAINZ_ARTISTID": "MusicBrainz Artist Id",
+    "MUSICBRAINZ_ALBUMARTISTID": "MusicBrainz Album Artist Id",
+    "MUSICBRAINZ_RELEASEGROUPID": "MusicBrainz Release Group Id",
+}
 
 
 def build_ffmpeg_command(
@@ -33,7 +92,7 @@ def build_ffmpeg_command(
     
     # Common arguments
     cmd = [
-        "ffmpeg", "-loglevel", "error", "-y",
+        "ffmpeg", "-loglevel", "error", "-xerror", "-y",
         "-i", source,
         "-map", "0:a:0",  # First audio stream
     ]
@@ -121,10 +180,44 @@ def _remove_artwork_from_command(cmd: list[str]) -> list[str]:
     return filtered
 
 
+def _source_from_cmd(cmd: list[str]) -> str:
+    """Return the input file of an ffmpeg command, for log lines."""
+    try:
+        return cmd[cmd.index("-i") + 1]
+    except (ValueError, IndexError):
+        return "?"
+
+
+def _decode_error(stderr: str) -> str | None:
+    """Return the first stderr line that reports a decode error, if any."""
+    for line in stderr.splitlines():
+        low = line.lower()
+        if any(h in low for h in _DECODE_ERROR_HINTS):
+            return line.strip()
+    return None
+
+
+def _is_artwork_error(stderr: str) -> bool:
+    """True when stderr points at the attached picture stream."""
+    low = stderr.lower()
+    return any(h in low for h in _ARTWORK_ERROR_HINTS)
+
+
+def _run_ffmpeg(cmd: list[str]) -> tuple[int, str]:
+    """Run ffmpeg; a decode error on stderr counts as a failure even with rc 0."""
+    proc = subprocess.run(cmd, capture_output=True)
+    stderr = proc.stderr.decode("utf-8", errors="ignore") if proc.stderr else ""
+    rc = proc.returncode
+    if rc == 0 and _decode_error(stderr):
+        rc = DECODE_ERROR_RC
+    return rc, stderr
+
+
 def atomic_ffmpeg_encode(
     cmd: list[str],
     final_dest: str,
     retry_without_artwork: bool = True,
+    finalize: Callable[[str], None] | None = None,
 ) -> int:
     """
     Run FFmpeg with atomic output (write to temp, then rename).
@@ -132,10 +225,13 @@ def atomic_ffmpeg_encode(
     Args:
         cmd: FFmpeg command (last element is destination)
         final_dest: Final destination path
-        retry_without_artwork: If True, retry without artwork on failure
+        retry_without_artwork: If True, retry without artwork when the
+            failure points at the attached picture stream
+        finalize: Optional callable run on the finished temp file before
+            the rename (used to copy extra tags)
     
     Returns:
-        Return code (0 for success)
+        Return code (0 for success). No output is written on failure.
     """
     final_dest = nfc_path(final_dest)
     dest_dir = os.path.dirname(final_dest)
@@ -153,50 +249,107 @@ def atomic_ffmpeg_encode(
     # Replace destination with temp path
     cmd = list(cmd)
     cmd[-1] = tmp_dest
+    source = _source_from_cmd(cmd)
     
     logger.info("► %s", " ".join(cmd))
-    proc = subprocess.run(cmd, capture_output=True)
-    rc = proc.returncode
+    rc, stderr = _run_ffmpeg(cmd)
     
-    if rc == 0:
-        try:
-            os.replace(tmp_dest, final_dest)
-            return 0
-        except Exception as e:
-            logger.error("Atomic replace failed for %s: %s", final_dest, e)
-            _cleanup_temp(tmp_dest)
-            return 1
-    
-    # Handle failure
-    logger.error("FFmpeg failed (rc=%s) for %s", rc, final_dest)
-    stderr = proc.stderr.decode("utf-8", errors="ignore") if proc.stderr else ""
-    _cleanup_temp(tmp_dest)
-    
-    # Retry without artwork if error seems artwork-related
-    artwork_error_hints = ["vf#", "vist#", "VipsJpeg", "png", "mjpeg", "decode"]
-    if retry_without_artwork and any(h in stderr.lower() for h in artwork_error_hints):
-        logger.warning("Retrying without cover art for %s", final_dest)
-        
-        filtered_cmd = _remove_artwork_from_command(cmd)
-        filtered_cmd[-1] = tmp_dest
-        
-        logger.info("► (retry) %s", " ".join(filtered_cmd))
-        proc2 = subprocess.run(filtered_cmd, capture_output=True)
-        rc = proc2.returncode
-        
-        if rc == 0:
-            try:
-                os.replace(tmp_dest, final_dest)
-                return 0
-            except Exception as e:
-                logger.error("Atomic replace failed for %s: %s", final_dest, e)
-                _cleanup_temp(tmp_dest)
-                return 1
-        
-        logger.error("FFmpeg retry also failed (rc=%s) for %s", rc, final_dest)
+    if rc != 0 and retry_without_artwork and _is_artwork_error(stderr):
         _cleanup_temp(tmp_dest)
+        logger.warning("Retrying without cover art for %s", final_dest)
+        cmd = _remove_artwork_from_command(cmd)
+        cmd[-1] = tmp_dest
+        logger.info("► (retry) %s", " ".join(cmd))
+        rc, stderr = _run_ffmpeg(cmd)
     
-    return rc
+    if rc != 0:
+        detail = _decode_error(stderr) or (stderr.strip().splitlines() or [""])[-1]
+        logger.error(
+            "FFmpeg failed (rc=%s) for %s → %s: %s", rc, source, final_dest, detail
+        )
+        _cleanup_temp(tmp_dest)
+        return rc
+    
+    if finalize is not None:
+        try:
+            finalize(tmp_dest)
+        except Exception as e:
+            logger.warning("Post-encode step failed for %s: %s", final_dest, e)
+    
+    try:
+        os.replace(tmp_dest, final_dest)
+        return 0
+    except Exception as e:
+        logger.error("Atomic replace failed for %s: %s", final_dest, e)
+        _cleanup_temp(tmp_dest)
+        return 1
+
+
+def _source_tag_values(source: str) -> dict[str, list[str]]:
+    """
+    Read FREEFORM_TAGS from *source*, whatever its tag format.
+
+    Vorbis comments (FLAC, Ogg, Opus) and APEv2 (APE, WavPack, TAK) store
+    them under the same names; ID3 (WAV, AIFF, MP3) uses TXXX and a few
+    standard frames.
+    """
+    audio = mutagen.File(source)
+    if audio is None or audio.tags is None:
+        return {}
+    tags = audio.tags
+
+    # Name -> values, with keys upper-cased for case-insensitive lookup.
+    plain: dict[str, list[str]] = {}
+    is_id3 = hasattr(tags, "getall")
+    if is_id3:
+        for frame in tags.getall("TXXX"):
+            plain[frame.desc.upper()] = [str(v) for v in frame.text]
+        for name, frame_id in _ID3_FRAMES.items():
+            frame = tags.get(frame_id)
+            if frame is not None:
+                plain[name] = [str(v) for v in frame.text]
+        ufid = tags.get("UFID:http://musicbrainz.org")
+        if ufid is not None:
+            plain["MUSICBRAINZ_TRACKID"] = [ufid.data.decode("ascii", "ignore")]
+        for name, desc in _ID3_TXXX.items():
+            if desc.upper() in plain:
+                plain[name] = plain[desc.upper()]
+    else:
+        for key, value in tags.items():
+            if isinstance(value, list):
+                values = value
+            elif isinstance(value, APETextValue):
+                values = list(value)
+            else:
+                values = [value]
+            plain[str(key).upper()] = [str(v) for v in values]
+
+    out: dict[str, list[str]] = {}
+    for name in FREEFORM_TAGS:
+        values = [v for v in plain.get(name, []) if v.strip()]
+        if values:
+            out[name] = values
+    return out
+
+
+def copy_freeform_tags(source: str, dest: str) -> int:
+    """
+    Copy FREEFORM_TAGS from *source* into the MP4 file *dest*.
+
+    Returns the number of tags written.
+    """
+    values = _source_tag_values(source)
+    if not values:
+        return 0
+    mp4 = MP4(dest)
+    if mp4.tags is None:
+        mp4.add_tags()
+    for name, vals in values.items():
+        mp4.tags[f"----:com.apple.iTunes:{name}"] = [
+            MP4FreeForm(v.encode("utf-8")) for v in vals
+        ]
+    mp4.save()
+    return len(values)
 
 
 def _cleanup_temp(path: str) -> None:

@@ -1,6 +1,7 @@
 """Tests for configuration loading."""
 
 import json
+import logging
 import os
 from pathlib import Path
 
@@ -222,3 +223,53 @@ class TestLoadConfig:
         monkeypatch.setenv("CONFIG_FILE", "/nonexistent/config.yaml")
         with pytest.raises(ValueError, match="CONFIG_FILE not found"):
             load_config()
+
+
+def _settings_config(settings):
+    return {
+        "source": {"path": "/music/flac"},
+        "outputs": [{"name": "alac", "codec": "alac", "path": "/music/alac"}],
+        "settings": settings,
+    }
+
+
+class TestSyncInterval:
+    """settings.sync_interval_seconds."""
+
+    def test_defaults_to_300(self):
+        assert Config.from_dict(_settings_config({})).sync_interval_seconds == 300
+
+    def test_read_from_settings(self):
+        cfg = Config.from_dict(_settings_config({"sync_interval_seconds": 60}))
+        assert cfg.sync_interval_seconds == 60
+
+    def test_rejects_zero(self):
+        with pytest.raises(ValueError, match="sync_interval_seconds"):
+            Config.from_dict(_settings_config({"sync_interval_seconds": 0}))
+
+
+class TestDeprecatedWhisperSettings:
+    """whisper_fallback / whisper_model still load, ignored, with one warning."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_warned(self, monkeypatch):
+        import audio_transcode_watcher.config as config_mod
+
+        monkeypatch.setattr(config_mod, "_deprecation_warned", False)
+
+    def test_old_config_loads_and_warns_once(self, caplog):
+        old = _settings_config({"whisper_fallback": True, "whisper_model": "base"})
+        with caplog.at_level(logging.WARNING, logger="audio_transcode_watcher.config"):
+            first = Config.from_dict(old)
+            Config.from_dict(old)
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 1
+        assert "whisper_fallback" in warnings[0].getMessage()
+        assert "whisper_model" in warnings[0].getMessage()
+        assert not hasattr(first, "whisper_fallback")
+        assert not hasattr(first, "whisper_model")
+
+    def test_no_warning_without_old_keys(self, caplog):
+        with caplog.at_level(logging.WARNING, logger="audio_transcode_watcher.config"):
+            Config.from_dict(_settings_config({"fetch_lyrics": True}))
+        assert not caplog.records

@@ -9,13 +9,24 @@ from pathlib import Path
 
 # Audio file extensions considered as source files
 LOSSLESS_EXTENSIONS = {
-    ".flac", ".alac", ".wav", ".ape", ".aiff",
-    ".wv", ".tta", ".ogg", ".opus"
+    ".flac", ".alac", ".wav", ".aiff", ".aif",
+    ".ape", ".wv", ".tta", ".tak",
 }
 
-LOSSY_EXTENSIONS = {".mp3", ".aac", ".m4a"}
+LOSSY_EXTENSIONS = {".mp3", ".aac", ".m4a", ".ogg", ".opus", ".wma"}
 
-AUDIO_EXTENSIONS = LOSSLESS_EXTENSIONS | LOSSY_EXTENSIONS | {".mp3"}
+AUDIO_EXTENSIONS = LOSSLESS_EXTENSIONS | LOSSY_EXTENSIONS
+
+# Codec of a lossy source, by extension, in the vocabulary of output codecs.
+# A lossy source is copied unchanged into a lossy output of the same codec.
+LOSSY_SOURCE_CODECS = {
+    ".mp3": "mp3",
+    ".aac": "aac",
+    ".m4a": "aac",
+    ".ogg": "vorbis",
+    ".opus": "opus",
+    ".wma": "wma",
+}
 
 # Sidecar file extensions to copy alongside transcoded audio
 SIDECAR_EXTENSIONS = {".lrc"}
@@ -66,6 +77,16 @@ def has_sidecar_extension(path: str) -> bool:
 def is_lossless(path: str) -> bool:
     """Check if a file is a lossless audio file."""
     return Path(path).suffix.lower() in LOSSLESS_EXTENSIONS
+
+
+def is_lossy(path: str) -> bool:
+    """Check if a file is a lossy audio file."""
+    return Path(path).suffix.lower() in LOSSY_EXTENSIONS
+
+
+def lossy_source_codec(path: str) -> str | None:
+    """Return the codec of a lossy source (e.g. ``"mp3"``), or None if lossless."""
+    return LOSSY_SOURCE_CODECS.get(Path(path).suffix.lower())
 
 
 def is_mp3(path: str) -> bool:

@@ -44,10 +44,12 @@ except ImportError:
 
 
 # Audio extensions considered as source files
+# (same sets as audio_transcode_watcher.utils)
+LOSSY_EXTENSIONS = {".mp3", ".aac", ".m4a", ".ogg", ".opus", ".wma"}
 SOURCE_EXTENSIONS = {
-    ".flac", ".alac", ".wav", ".ape", ".aiff",
-    ".wv", ".tta", ".ogg", ".opus", ".mp3"
-}
+    ".flac", ".alac", ".wav", ".aiff", ".aif",
+    ".ape", ".wv", ".tta", ".tak",
+} | LOSSY_EXTENSIONS
 
 
 def nfc(s: str) -> str:
@@ -461,18 +463,20 @@ def load_outputs_from_config(config_path: str) -> tuple[str, list[OutputDefiniti
         codec = output_data.get("codec", "")
         
         # Determine extensions based on codec
+        # Lossless outputs also hold lossy sources copied unchanged;
+        # lossy outputs hold copies of sources in their own codec.
         if codec == "alac":
-            extensions = {".m4a", ".mp3"}  # ALAC folder may have copied MP3s
+            extensions = {".m4a"} | LOSSY_EXTENSIONS
         elif codec == "mp3":
             extensions = {".mp3"}
         elif codec in ("aac",):
-            extensions = {".m4a"}
+            extensions = {".m4a", ".aac"}
         elif codec == "opus":
             extensions = {".opus"}
         elif codec == "flac":
-            extensions = {".flac"}
+            extensions = {".flac"} | LOSSY_EXTENSIONS
         elif codec == "wav":
-            extensions = {".wav"}
+            extensions = {".wav"} | LOSSY_EXTENSIONS
         else:
             extensions = {".m4a", ".mp3", ".opus", ".flac", ".wav"}
         

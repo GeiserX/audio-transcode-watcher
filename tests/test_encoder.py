@@ -1,16 +1,23 @@
 """Tests for FFmpeg encoder module."""
 
+import logging
 import os
+import shutil
+import stat
+import subprocess
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from audio_transcode_watcher.config import OutputConfig
 from audio_transcode_watcher.encoder import (
+    FREEFORM_TAGS,
     _cleanup_temp,
     _remove_artwork_from_command,
     atomic_ffmpeg_encode,
     build_ffmpeg_command,
+    copy_freeform_tags,
 )
 
 
@@ -414,3 +421,243 @@ class TestCleanupTemp:
         with patch("os.path.exists", return_value=True), \
              patch("os.remove", side_effect=PermissionError("denied")):
             _cleanup_temp(str(tmp_path / "locked.tmp__ff"))
+
+
+# A stand-in for ffmpeg: logs its arguments, writes the output file, prints
+# FAKE_STDERR and exits FAKE_RC. When FAKE_ART_STDERR is set, a command that
+# still maps the cover art stream fails with that stderr instead.
+FAKE_FFMPEG = """#!/bin/sh
+for last; do :; done
+echo "$*" >> "$FAKE_LOG"
+case " $* " in *" 0:v:0? "*) art=1;; *) art=0;; esac
+if [ "$art" = 1 ] && [ -n "$FAKE_ART_STDERR" ]; then
+  printf '%b\\n' "$FAKE_ART_STDERR" >&2
+  exit 1
+fi
+printf data > "$last"
+if [ -n "$FAKE_STDERR" ]; then printf '%b\\n' "$FAKE_STDERR" >&2; fi
+exit ${FAKE_RC:-0}
+"""
+
+CORRUPT_FLAC_STDERR = (
+    "[flac @ 0x7f] invalid residual\\n"
+    "[flac @ 0x7f] decode_frame() failed"
+)
+
+
+@pytest.fixture
+def fake_ffmpeg(tmp_path, monkeypatch):
+    """Put a fake ffmpeg first on PATH; return the file it logs calls to."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    script = bin_dir / "ffmpeg"
+    script.write_text(FAKE_FFMPEG)
+    script.chmod(script.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    log = tmp_path / "ffmpeg-calls.log"
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setenv("FAKE_LOG", str(log))
+    for var in ("FAKE_RC", "FAKE_STDERR", "FAKE_ART_STDERR"):
+        monkeypatch.delenv(var, raising=False)
+    return log
+
+
+def _calls(log: Path) -> list[str]:
+    return log.read_text().splitlines() if log.exists() else []
+
+
+def _alac_cmd(tmp_path, name="Etta James - I'd Rather Go Blind"):
+    out = OutputConfig(name="alac", codec="alac", path=str(tmp_path / "alac"))
+    src = str(tmp_path / f"{name}.flac")
+    dest = str(tmp_path / "alac" / f"{name}.m4a")
+    return build_ffmpeg_command(src, dest, out), dest
+
+
+class TestFailLoudly:
+    """A source that does not decode cleanly fails, even when ffmpeg exits 0."""
+
+    @pytest.mark.parametrize("codec", ["alac", "aac", "mp3", "opus", "flac", "wav"])
+    def test_every_command_uses_xerror(self, codec):
+        out = OutputConfig(name=codec, codec=codec, path="/out")
+        assert "-xerror" in build_ffmpeg_command("/in/a.flac", "/out/a.x", out)
+
+    def test_clean_run_succeeds(self, fake_ffmpeg, tmp_path):
+        cmd, dest = _alac_cmd(tmp_path)
+        assert atomic_ffmpeg_encode(cmd, dest) == 0
+        assert os.path.isfile(dest)
+        assert len(_calls(fake_ffmpeg)) == 1
+
+    @pytest.mark.parametrize(
+        "stderr",
+        [
+            CORRUPT_FLAC_STDERR,
+            "[aist#0:0/flac @ 0x1] Decoding error: Invalid data found when processing input",
+            "Error while decoding stream #0:0: Invalid data found when processing input",
+        ],
+    )
+    def test_decode_error_with_exit_0_fails(self, fake_ffmpeg, tmp_path, monkeypatch, caplog, stderr):
+        monkeypatch.setenv("FAKE_RC", "0")
+        monkeypatch.setenv("FAKE_STDERR", stderr)
+        cmd, dest = _alac_cmd(tmp_path)
+
+        with caplog.at_level(logging.ERROR, logger="audio_transcode_watcher.encoder"):
+            rc = atomic_ffmpeg_encode(cmd, dest)
+
+        assert rc != 0
+        assert not os.path.exists(dest)
+        assert not os.path.exists(dest + ".tmp__ff")
+        errors = [r.getMessage() for r in caplog.records if r.levelno == logging.ERROR]
+        assert any("I'd Rather Go Blind.flac" in m for m in errors)
+
+    def test_nonzero_exit_fails(self, fake_ffmpeg, tmp_path, monkeypatch):
+        monkeypatch.setenv("FAKE_RC", "183")
+        cmd, dest = _alac_cmd(tmp_path)
+        assert atomic_ffmpeg_encode(cmd, dest) == 183
+        assert not os.path.exists(dest)
+
+    def test_decode_error_does_not_trigger_artwork_retry(self, fake_ffmpeg, tmp_path, monkeypatch):
+        monkeypatch.setenv("FAKE_RC", "1")
+        monkeypatch.setenv("FAKE_STDERR", CORRUPT_FLAC_STDERR)
+        cmd, dest = _alac_cmd(tmp_path)
+        assert "0:v:0?" in cmd
+
+        assert atomic_ffmpeg_encode(cmd, dest) != 0
+        assert len(_calls(fake_ffmpeg)) == 1
+
+    @pytest.mark.parametrize(
+        "art_stderr",
+        [
+            "[mp4 @ 0x1] Could not find tag for codec png in stream #1, codec not currently supported in container",
+            "[vist#0:1/mjpeg @ 0x1] Error while decoding attached picture",
+            "Error initializing output stream 0:1 -- video stream",
+        ],
+    )
+    def test_artwork_error_retries_without_cover(self, fake_ffmpeg, tmp_path, monkeypatch, art_stderr):
+        monkeypatch.setenv("FAKE_ART_STDERR", art_stderr)
+        cmd, dest = _alac_cmd(tmp_path)
+
+        assert atomic_ffmpeg_encode(cmd, dest) == 0
+        calls = _calls(fake_ffmpeg)
+        assert len(calls) == 2
+        assert "0:v:0?" in calls[0]
+        assert "0:v:0?" not in calls[1]
+        assert os.path.isfile(dest)
+
+
+def _make_flac(path: Path, seconds: int = 3) -> None:
+    subprocess.run(
+        [
+            "ffmpeg", "-loglevel", "error", "-y",
+            "-f", "lavfi", "-i", f"sine=frequency=440:duration={seconds}",
+            "-c:a", "flac", str(path),
+        ],
+        check=True,
+    )
+
+
+REAL_TAG_VALUES = {
+    "REPLAYGAIN_TRACK_GAIN": "-6.50 dB",
+    "REPLAYGAIN_TRACK_PEAK": "0.988525",
+    "REPLAYGAIN_ALBUM_GAIN": "-7.10 dB",
+    "REPLAYGAIN_ALBUM_PEAK": "1.000000",
+    "MUSICBRAINZ_TRACKID": "b8b7a3c3-9a4e-4c7b-9a43-5c3b2d0e4f11",
+    "MUSICBRAINZ_ALBUMID": "1f9a2b3c-4d5e-6f70-8192-a3b4c5d6e7f8",
+    "MUSICBRAINZ_ARTISTID": "6f2a7c11-0d6e-4b2f-9b8c-1e2d3c4b5a69",
+    "MUSICBRAINZ_ALBUMARTISTID": "6f2a7c11-0d6e-4b2f-9b8c-1e2d3c4b5a69",
+    "MUSICBRAINZ_RELEASEGROUPID": "0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9",
+    "ISRC": "USMC16046323",
+    "LABEL": "Argo",
+    "CATALOGNUMBER": "LP-4003",
+    "ARTISTSORT": "James, Etta",
+    "ALBUMARTISTSORT": "James, Etta",
+    "ALBUMSORT": "At Last!",
+}
+
+needs_ffmpeg = pytest.mark.skipif(
+    shutil.which("ffmpeg") is None,
+    reason="ffmpeg is not installed; the real-file tag checks need it",
+)
+
+
+@needs_ffmpeg
+class TestFreeformTagsRealFiles:
+    """Tags the MP4 atoms cannot hold survive an ALAC or AAC encode."""
+
+    def test_list_covers_the_required_tags(self):
+        assert set(REAL_TAG_VALUES) <= set(FREEFORM_TAGS)
+
+    @pytest.mark.parametrize("codec", ["alac", "aac"])
+    def test_flac_tags_land_as_itunes_freeform_atoms(self, tmp_path, codec):
+        from mutagen.flac import FLAC
+        from mutagen.mp4 import MP4
+
+        src = tmp_path / "Etta James - At Last.flac"
+        _make_flac(src)
+        flac = FLAC(str(src))
+        flac["TITLE"] = "At Last"
+        flac["ARTIST"] = "Etta James"
+        for k, v in REAL_TAG_VALUES.items():
+            flac[k] = v
+        flac.save()
+
+        out = OutputConfig(name=codec, codec=codec, path=str(tmp_path / codec))
+        dest = str(tmp_path / codec / "Etta James - At Last.m4a")
+        cmd = build_ffmpeg_command(str(src), dest, out)
+        rc = atomic_ffmpeg_encode(
+            cmd, dest, finalize=lambda tmp: copy_freeform_tags(str(src), tmp)
+        )
+        assert rc == 0
+
+        tags = MP4(dest).tags
+        for k, v in REAL_TAG_VALUES.items():
+            atom = f"----:com.apple.iTunes:{k}"
+            assert atom in tags, atom
+            assert bytes(tags[atom][0]).decode() == v
+        # Standard atoms ffmpeg writes are still there.
+        assert tags["\xa9nam"] == ["At Last"]
+        assert tags["\xa9ART"] == ["Etta James"]
+
+    def test_id3_source_tags_are_read(self, tmp_path):
+        from mutagen.id3 import TPUB, TSOP, TSRC, TXXX, UFID
+        from mutagen.mp4 import MP4
+        from mutagen.wave import WAVE
+
+        src = tmp_path / "song.wav"
+        subprocess.run(
+            ["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi",
+             "-i", "sine=duration=1", str(src)],
+            check=True,
+        )
+        wav = WAVE(str(src))
+        wav.add_tags()
+        wav.tags.add(TXXX(encoding=3, desc="REPLAYGAIN_TRACK_GAIN", text=["-3.00 dB"]))
+        wav.tags.add(TXXX(encoding=3, desc="MusicBrainz Album Id", text=["album-id"]))
+        wav.tags.add(UFID(owner="http://musicbrainz.org", data=b"track-id"))
+        wav.tags.add(TSRC(encoding=3, text=["GBAYE0601498"]))
+        wav.tags.add(TPUB(encoding=3, text=["Parlophone"]))
+        wav.tags.add(TSOP(encoding=3, text=["Beatles, The"]))
+        wav.save()
+
+        dest = tmp_path / "song.m4a"
+        subprocess.run(
+            ["ffmpeg", "-loglevel", "error", "-y", "-i", str(src),
+             "-c:a", "alac", "-f", "mp4", str(dest)],
+            check=True,
+        )
+        assert copy_freeform_tags(str(src), str(dest)) == 6
+
+        tags = MP4(str(dest)).tags
+        expect = {
+            "REPLAYGAIN_TRACK_GAIN": "-3.00 dB",
+            "MUSICBRAINZ_ALBUMID": "album-id",
+            "MUSICBRAINZ_TRACKID": "track-id",
+            "ISRC": "GBAYE0601498",
+            "LABEL": "Parlophone",
+            "ARTISTSORT": "Beatles, The",
+        }
+        for k, v in expect.items():
+            assert bytes(tags[f"----:com.apple.iTunes:{k}"][0]).decode() == v
+
+    def test_source_without_tags_writes_nothing(self, tmp_path):
+        src = tmp_path / "bare.flac"
+        _make_flac(src, seconds=1)
+        assert copy_freeform_tags(str(src), str(tmp_path / "unused.m4a")) == 0

@@ -1,4 +1,4 @@
-"""Automatic lyrics fetching with syncedlyrics and Whisper fallback."""
+"""Automatic lyrics fetching with syncedlyrics."""
 
 from __future__ import annotations
 
@@ -14,75 +14,40 @@ from .utils import nfc, nfc_path
 
 logger = logging.getLogger(__name__)
 
-# Lazy-loaded Whisper model (heavyweight, only load once when needed)
-_whisper_model = None
-_whisper_load_failed = False
+# A synced line: one or more [mm:ss.xx] stamps, then the text.
+_TIMED_LINE = re.compile(r"^\s*(?:\[\d{1,3}:\d{1,2}(?:[.:]\d{1,3})?\])+(.*)$")
+_URL = re.compile(r"(https?://|www\.)\S+|\b\S+\.(com|net|org|io|me|ru|cn)\b", re.IGNORECASE)
+_TOKEN = re.compile(r"\w+|[^\w\s]+")
+
+# Fewer timed lines than this is not a usable synced lyric.
+MIN_TIMED_LINES = 4
 
 
-def _get_whisper_model(model_name: str = "base"):
-    """Lazy-load and cache the Whisper model."""
-    global _whisper_model, _whisper_load_failed
-    if _whisper_load_failed:
-        return None
-    if _whisper_model is not None:
-        return _whisper_model
-    try:
-        import whisper
-
-        logger.info("Loading Whisper model '%s' (first use, may take a moment)...", model_name)
-        _whisper_model = whisper.load_model(model_name)
-        logger.info("Whisper model '%s' loaded", model_name)
-        return _whisper_model
-    except Exception:
-        logger.warning("Failed to load Whisper model", exc_info=True)
-        _whisper_load_failed = True
-        return None
-
-
-def _segments_to_lrc(segments: list[dict]) -> str:
-    """Convert Whisper transcript segments to LRC format."""
-    lines = []
-    for seg in segments:
-        start = seg.get("start", 0.0)
-        text = seg.get("text", "").strip()
-        if not text:
-            continue
-        mins = int(start // 60)
-        secs = start % 60
-        lines.append(f"[{mins:02d}:{secs:05.2f}] {text}")
-    return "\n".join(lines)
-
-
-def _transcribe_with_whisper(filepath: str, model_name: str = "base") -> str | None:
+def lyrics_reject_reason(content: str) -> str | None:
     """
-    Transcribe audio to synced lyrics using Whisper.
+    Return why a fetched lyric should not be saved, or None if it is usable.
 
-    Args:
-        filepath: Path to the audio file.
-        model_name: Whisper model size (tiny, base, small, medium, large).
-
-    Returns:
-        LRC-formatted string, or None on failure.
+    Rejects plain or near-empty results (fewer than MIN_TIMED_LINES timed
+    lines with text), results made of a single repeated token (``"♪ ♪ ♪"``),
+    and results whose only text is an advertisement line carrying a URL.
     """
-    model = _get_whisper_model(model_name)
-    if model is None:
-        return None
+    texts = []
+    for line in content.splitlines():
+        m = _TIMED_LINE.match(line)
+        if m and m.group(1).strip():
+            texts.append(m.group(1).strip())
 
-    try:
-        logger.info("Transcribing with Whisper: %s", Path(filepath).name)
-        result = model.transcribe(filepath, verbose=False)
-        segments = result.get("segments", [])
-        if not segments:
-            logger.info("Whisper produced no segments for: %s", Path(filepath).name)
-            return None
-        lrc = _segments_to_lrc(segments)
-        logger.info(
-            "Whisper transcribed %d segments for: %s", len(segments), Path(filepath).name
-        )
-        return lrc
-    except Exception:
-        logger.warning("Whisper transcription failed for: %s", filepath, exc_info=True)
-        return None
+    if texts and all(_URL.search(t) for t in texts):
+        return "only an advertisement line"
+
+    tokens = {t.lower() for text in texts for t in _TOKEN.findall(text)}
+    if len(tokens) == 1:
+        return f"a single repeated token ({next(iter(tokens))!r})"
+
+    if len(texts) < MIN_TIMED_LINES:
+        return f"{len(texts)} timed lines (need {MIN_TIMED_LINES})"
+
+    return None
 
 
 def extract_metadata(filepath: str) -> tuple[str, str] | None:
@@ -123,27 +88,19 @@ def extract_metadata(filepath: str) -> tuple[str, str] | None:
     return None
 
 
-def fetch_lyrics_for_file(
-    filepath: str,
-    whisper_fallback: bool = True,
-    whisper_model: str = "base",
-) -> str | None:
+def fetch_lyrics_for_file(filepath: str) -> str | None:
     """
     Fetch synced lyrics (.lrc) for an audio file if not already present.
 
     Strategy:
       1. Check if .lrc sidecar already exists -> skip
       2. Try syncedlyrics providers (Musixmatch, LRCLIB, NetEase)
-      3. If nothing found and whisper_fallback enabled, transcribe locally
-
-    Args:
-        filepath: Path to the audio file.
-        whisper_fallback: Use Whisper local transcription as fallback.
-        whisper_model: Whisper model size (tiny, base, small, medium, large).
+      3. Write the result only if it passes lyrics_reject_reason(); when
+         nothing usable is found, write nothing
 
     Returns:
-        Path to the written .lrc file, or None if lyrics were not found
-        or already existed.
+        Path to the written .lrc file, or None if lyrics were not found,
+        were rejected, or already existed.
     """
     filepath = nfc_path(filepath)
     lrc_path = nfc_path(str(Path(filepath).with_suffix(".lrc")))
@@ -152,42 +109,62 @@ def fetch_lyrics_for_file(
     if os.path.isfile(lrc_path):
         return None
 
-    lrc_content: str | None = None
-
-    # Step 1: Try syncedlyrics
     meta = extract_metadata(filepath)
-    if meta is not None:
-        artist, title = meta
-        query = f"{artist} {title}"
-        try:
-            lrc_content = syncedlyrics.search(query)
-        except Exception:
-            logger.warning("syncedlyrics search failed for: %s", query, exc_info=True)
-
-        if lrc_content:
-            return _write_lrc(lrc_path, lrc_content, f"{artist} - {title}", "syncedlyrics")
-
-        logger.info("No lyrics found via syncedlyrics for: %s - %s", artist, title)
-    else:
+    if meta is None:
         logger.debug("Cannot extract metadata for lyrics: %s", filepath)
+        return None
 
-    # Step 2: Whisper fallback
-    if whisper_fallback:
-        lrc_content = _transcribe_with_whisper(filepath, whisper_model)
-        if lrc_content:
-            label = f"{meta[0]} - {meta[1]}" if meta else Path(filepath).stem
-            return _write_lrc(lrc_path, lrc_content, label, "whisper")
+    artist, title = meta
+    query = f"{artist} {title}"
+    lrc_content: str | None = None
+    try:
+        lrc_content = syncedlyrics.search(query)
+    except Exception:
+        logger.warning("syncedlyrics search failed for: %s", query, exc_info=True)
 
-    return None
+    if not lrc_content:
+        logger.info("No lyrics found via syncedlyrics for: %s - %s", artist, title)
+        return None
+
+    reason = lyrics_reject_reason(lrc_content)
+    if reason:
+        logger.info("Rejected lyrics for %s - %s: %s", artist, title, reason)
+        return None
+
+    return _write_lrc(
+        lrc_path, lrc_content, f"{artist} - {title}", "syncedlyrics", owner_of=filepath
+    )
 
 
-def _write_lrc(lrc_path: str, content: str, label: str, source: str) -> str | None:
-    """Write LRC content to disk."""
+def _write_lrc(
+    lrc_path: str,
+    content: str,
+    label: str,
+    source: str,
+    owner_of: str | None = None,
+) -> str | None:
+    """Write LRC content to disk, owned like *owner_of* with mode 0664."""
     try:
         with open(lrc_path, "w", encoding="utf-8") as f:
             f.write(content)
-        logger.info("♫ lyrics saved (%s): %s → %s", source, label, lrc_path)
-        return lrc_path
     except Exception:
         logger.error("Failed to write lyrics file: %s", lrc_path, exc_info=True)
         return None
+
+    if owner_of:
+        _match_owner(lrc_path, owner_of)
+    logger.info("♫ lyrics saved (%s): %s → %s", source, label, lrc_path)
+    return lrc_path
+
+
+def _match_owner(path: str, reference: str) -> None:
+    """Give *path* the uid:gid of *reference* and mode 0664 (best effort)."""
+    try:
+        st = os.stat(reference)
+        os.chown(path, st.st_uid, st.st_gid)
+    except OSError as e:
+        logger.debug("Could not chown %s like %s: %s", path, reference, e)
+    try:
+        os.chmod(path, 0o664)
+    except OSError as e:
+        logger.debug("Could not chmod %s: %s", path, e)

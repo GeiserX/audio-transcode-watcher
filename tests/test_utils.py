@@ -6,6 +6,8 @@ from unittest.mock import patch
 import pytest
 
 from audio_transcode_watcher.utils import (
+    LOSSLESS_EXTENSIONS,
+    LOSSY_EXTENSIONS,
     appears_empty_dir,
     get_output_file_path,
     get_output_filename,
@@ -14,7 +16,9 @@ from audio_transcode_watcher.utils import (
     has_sidecar_extension,
     is_audio_file,
     is_lossless,
+    is_lossy,
     is_mp3,
+    lossy_source_codec,
     nfc,
     nfc_path,
     remove_empty_dirs,
@@ -419,3 +423,49 @@ class TestAppearsEmptyDirError:
         with patch("os.path.isdir", return_value=True), \
              patch("os.scandir", side_effect=PermissionError("denied")):
             assert appears_empty_dir("/some/path") is True
+
+
+LOSSLESS = [".flac", ".alac", ".wav", ".aiff", ".aif", ".ape", ".wv", ".tta", ".tak"]
+LOSSY = [".mp3", ".aac", ".m4a", ".ogg", ".opus", ".wma"]
+
+
+class TestExtensionClassification:
+    """Every source extension is either lossless or lossy, never both."""
+
+    def test_sets_are_exactly_these(self):
+        assert LOSSLESS_EXTENSIONS == set(LOSSLESS)
+        assert LOSSY_EXTENSIONS == set(LOSSY)
+
+    @pytest.mark.parametrize("ext", LOSSLESS)
+    def test_lossless(self, ext):
+        assert is_lossless(f"Artist - Title{ext}")
+        assert not is_lossy(f"Artist - Title{ext}")
+        assert has_audio_extension(f"Artist - Title{ext.upper()}")
+
+    @pytest.mark.parametrize("ext", LOSSY)
+    def test_lossy(self, ext):
+        assert is_lossy(f"Artist - Title{ext}")
+        assert not is_lossless(f"Artist - Title{ext}")
+        assert has_audio_extension(f"Artist - Title{ext.upper()}")
+
+    @pytest.mark.parametrize(
+        "ext,codec",
+        [
+            (".mp3", "mp3"),
+            (".aac", "aac"),
+            (".m4a", "aac"),
+            (".ogg", "vorbis"),
+            (".opus", "opus"),
+            (".wma", "wma"),
+            (".flac", None),
+            (".tak", None),
+        ],
+    )
+    def test_lossy_source_codec(self, ext, codec):
+        assert lossy_source_codec(f"song{ext}") == codec
+
+    def test_walk_finds_formats_the_bot_now_saves(self, temp_dir):
+        for name in ["a.aif", "b.tak", "c.wma", "d.ogg", "notes.txt"]:
+            (Path(temp_dir) / name).touch()
+        found = sorted(Path(f).name for f in walk_audio_files(temp_dir))
+        assert found == ["a.aif", "b.tak", "c.wma", "d.ogg"]

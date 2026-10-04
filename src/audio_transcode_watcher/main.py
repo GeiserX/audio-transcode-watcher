@@ -72,18 +72,17 @@ def main() -> int:
     observer = start_watcher(config)
     logger.info("Watching %s …", config.source_path)
     
-    # Periodic sync interval (check for missing outputs every 5 minutes)
-    sync_interval = 300  # 5 minutes
+    # Periodic sync interval (settings.sync_interval_seconds, default 300)
+    sync_interval = config.sync_interval_seconds
     last_sync = time.time()
     
     try:
         while True:
-            time.sleep(10)
+            time.sleep(min(10, sync_interval))
             
             # Periodic sync to catch deleted outputs
             if time.time() - last_sync >= sync_interval:
-                logger.info("Periodic sync check…")
-                initial_sync(config)
+                initial_sync(config, periodic=True)
                 gc.collect()
                 last_sync = time.time()
     except KeyboardInterrupt:
