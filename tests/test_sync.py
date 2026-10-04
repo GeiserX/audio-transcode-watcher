@@ -1456,6 +1456,32 @@ class TestRealCorruptSource:
         assert list(out.iterdir()) == []
         assert str(bad) in sync_mod._failed_sources
 
+    def test_one_flipped_bit_is_caught(self, temp_dir):
+        """ffmpeg 7.1 decodes this silently unless frame CRCs are checked."""
+        import subprocess
+
+        source, out = _dirs(temp_dir, "source", "alac")
+        good = source / "good.tmp.flac"
+        subprocess.run(
+            ["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi",
+             "-i", "sine=frequency=440:duration=5", "-c:a", "flac", str(good)],
+            check=True,
+        )
+        data = bytearray(good.read_bytes())
+        good.unlink()
+        data[len(data) // 2] ^= 0x01
+        bad = source / "One Bit - Flipped.flac"
+        bad.write_bytes(bytes(data))
+        config = Config(
+            source_path=str(source),
+            outputs=[OutputConfig(name="alac", codec="alac", path=str(out))],
+            fetch_lyrics=False,
+        )
+
+        process_source_file(str(bad), config, check_stable=False)
+
+        assert list(out.iterdir()) == []
+
 
 class TestLosslessWinsAtProcessTime:
     """A lossless source that arrives after its lossy twin replaces the copy."""

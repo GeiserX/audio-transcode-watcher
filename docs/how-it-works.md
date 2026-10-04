@@ -13,7 +13,7 @@ Lossy sources are copied rather than encoded where that keeps quality honest; se
 
 ## Corrupt sources
 
-FFmpeg runs with `-xerror`. If a source does not decode cleanly, the encode fails even when FFmpeg exits 0 but printed a decode error. The error is logged with the file name and no output is written. The file is not tried again until its modification time changes, or the service restarts.
+FFmpeg runs with `-xerror` and `-err_detect crccheck+explode`, so a frame whose checksum does not match stops the encode. If a source does not decode cleanly, the encode fails even when FFmpeg exits 0 but printed a decode error. The error is logged with the file name and no output is written. The file is not tried again until its modification time changes, or the service restarts.
 
 ## Recursive Directory Support
 

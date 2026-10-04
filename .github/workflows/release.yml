@@ -12,17 +12,16 @@ env:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # The Docker image's base, so the real-file tests run against the FFmpeg
+    # the image ships. Ubuntu's FFmpeg 6.1 misses corruption that 7.1 catches.
+    container: python:3.14-slim
     steps:
+      - name: Install FFmpeg and the tools checkout and Codecov need
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ffmpeg git curl gnupg ca-certificates
+
       - uses: actions/checkout@v7
-
-      - name: Set up Python 3.14
-        uses: actions/setup-python@v7
-        with:
-          python-version: '3.14'
-          cache: 'pip'
-
-      - name: Install FFmpeg (the real-file tests need it)
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
 
       - name: Install dependencies
         run: |

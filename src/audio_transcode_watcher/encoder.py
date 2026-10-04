@@ -99,8 +99,12 @@ def build_ffmpeg_command(
     dest = nfc_path(dest)
     
     # Common arguments
+    # -err_detect crccheck+explode makes the decoder verify each frame's
+    # checksum and stop on a mismatch. Without it ffmpeg 7.1 (the image's)
+    # decodes a FLAC with one flipped bit silently.
     cmd = [
         "ffmpeg", "-loglevel", "error", "-xerror", "-y",
+        "-err_detect", "crccheck+explode",
         "-i", source,
         "-map", "0:a:0",  # First audio stream
     ]

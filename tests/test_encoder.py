@@ -480,6 +480,14 @@ class TestFailLoudly:
         out = OutputConfig(name=codec, codec=codec, path="/out")
         assert "-xerror" in build_ffmpeg_command("/in/a.flac", "/out/a.x", out)
 
+    @pytest.mark.parametrize("codec", ["alac", "aac", "mp3", "opus", "flac", "wav"])
+    def test_every_command_checks_frame_crcs_on_input(self, codec):
+        out = OutputConfig(name=codec, codec=codec, path="/out")
+        cmd = build_ffmpeg_command("/in/a.flac", "/out/a.x", out)
+        i = cmd.index("-err_detect")
+        assert cmd[i + 1] == "crccheck+explode"
+        assert i < cmd.index("-i")  # an input option, so it must come first
+
     def test_clean_run_succeeds(self, fake_ffmpeg, tmp_path):
         cmd, dest = _alac_cmd(tmp_path)
         assert atomic_ffmpeg_encode(cmd, dest) == 0
