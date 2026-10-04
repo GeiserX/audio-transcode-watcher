@@ -322,6 +322,23 @@ def _made_from_lossy(output: OutputConfig, out_path: str) -> bool:
     return True
 
 
+def _tolerant_source_changed(
+    output: OutputConfig, out_path: str, source_path: str
+) -> bool:
+    """True if *out_path* is a tolerant copy and its source has since changed.
+
+    A damaged source replaced by a clean copy gets a strict encode again.
+    """
+    row = manifest.lookup(output.path, out_path)
+    if not row or row.get("kind") != "tolerant":
+        return False
+    try:
+        st = os.stat(source_path)
+    except OSError:
+        return False
+    return (st.st_size, st.st_mtime) != (row.get("size"), row.get("mtime"))
+
+
 def _process_outputs(source_path: str, config: Config, force: bool) -> bool:
     """
     Process all outputs for a source file.
@@ -349,13 +366,19 @@ def _process_outputs(source_path: str, config: Config, force: bool) -> bool:
         if siblings:
             _remove_lossy_copies(source_path, siblings, output, config)
         if not force and os.path.exists(out_path):
-            if not (is_lossless(source_path) and _made_from_lossy(output, out_path)):
+            if _tolerant_source_changed(output, out_path, source_path):
+                logger.info(
+                    "Rebuilding %s: it was made from a damaged source that has changed",
+                    out_path,
+                )
+            elif is_lossless(source_path) and _made_from_lossy(output, out_path):
+                logger.info(
+                    "Replacing %s: it was made from a lossy source, %s wins",
+                    out_path,
+                    source_path,
+                )
+            else:
                 continue
-            logger.info(
-                "Replacing %s: it was made from a lossy source, %s wins",
-                out_path,
-                source_path,
-            )
 
         os.makedirs(os.path.dirname(out_path), exist_ok=True)
         if action == "copy":
