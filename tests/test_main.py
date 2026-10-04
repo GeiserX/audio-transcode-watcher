@@ -125,6 +125,7 @@ class TestMain:
         # We use a counter so every call returns an incrementing value that
         # eventually crosses the 300-second threshold.
         counter = [0]
+
         def fake_time():
             counter[0] += 1
             # First call (last_sync = time.time()) -> 0
@@ -132,13 +133,16 @@ class TestMain:
             return 0 if counter[0] == 1 else 400
 
         sleep_calls = [0]
+
         def fake_sleep(secs):
             sleep_calls[0] += 1
             if sleep_calls[0] >= 2:
                 raise KeyboardInterrupt
 
-        with patch("time.time", side_effect=fake_time), \
-             patch("time.sleep", side_effect=fake_sleep):
+        with (
+            patch("time.time", side_effect=fake_time),
+            patch("time.sleep", side_effect=fake_sleep),
+        ):
             main()
 
         # initial_sync called once at startup + once in periodic loop
@@ -150,7 +154,9 @@ class TestMain:
     @patch("audio_transcode_watcher.main.initial_sync")
     @patch("audio_transcode_watcher.main.load_config")
     @patch("os.path.isdir", return_value=True)
-    def test_logs_output_with_bitrate(self, _isdir, mock_load, _sync, mock_watcher, _sleep):
+    def test_logs_output_with_bitrate(
+        self, _isdir, mock_load, _sync, mock_watcher, _sleep
+    ):
         """Log output configuration including bitrate when present."""
         from audio_transcode_watcher.config import Config, OutputConfig
 
@@ -170,14 +176,24 @@ class TestMain:
 class TestConfigurableInterval:
     """settings.sync_interval_seconds drives the periodic pass."""
 
-    @pytest.mark.parametrize("interval,elapsed,expected_calls", [(60, 61, 2), (300, 61, 1)])
+    @pytest.mark.parametrize(
+        "interval,elapsed,expected_calls", [(60, 61, 2), (300, 61, 1)]
+    )
     @patch("gc.collect")
     @patch("audio_transcode_watcher.main.start_watcher")
     @patch("audio_transcode_watcher.main.initial_sync")
     @patch("audio_transcode_watcher.main.load_config")
     @patch("os.path.isdir", return_value=True)
     def test_interval_from_config(
-        self, _isdir, mock_load, mock_sync, mock_watcher, _gc, interval, elapsed, expected_calls
+        self,
+        _isdir,
+        mock_load,
+        mock_sync,
+        mock_watcher,
+        _gc,
+        interval,
+        elapsed,
+        expected_calls,
     ):
         from audio_transcode_watcher.config import Config, OutputConfig
 
@@ -195,8 +211,10 @@ class TestConfigurableInterval:
             if sleeps[0] >= 2:
                 raise KeyboardInterrupt
 
-        with patch("time.time", side_effect=lambda: next(times)), \
-             patch("time.sleep", side_effect=fake_sleep):
+        with (
+            patch("time.time", side_effect=lambda: next(times)),
+            patch("time.sleep", side_effect=fake_sleep),
+        ):
             main()
 
         assert mock_sync.call_count == expected_calls

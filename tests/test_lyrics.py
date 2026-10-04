@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -93,9 +94,8 @@ class TestFetchLyricsForFile:
         assert result is not None
         assert result.endswith(".lrc")
         assert os.path.isfile(result)
-        content = open(result).read()
+        content = Path(result).read_text()
         assert "Radio gaga" in content
-
 
     @patch("audio_transcode_watcher.lyrics.syncedlyrics")
     @patch("audio_transcode_watcher.lyrics.extract_metadata")
@@ -118,7 +118,9 @@ class TestFetchLyricsForFile:
 
     @patch("audio_transcode_watcher.lyrics.syncedlyrics")
     @patch("audio_transcode_watcher.lyrics.extract_metadata")
-    def test_handles_syncedlyrics_exception(self, mock_meta, mock_syncedlyrics, tmp_path):
+    def test_handles_syncedlyrics_exception(
+        self, mock_meta, mock_syncedlyrics, tmp_path
+    ):
         """Handle exception from syncedlyrics.search gracefully."""
         audio = tmp_path / "Artist - Song.flac"
         audio.touch()
@@ -135,9 +137,11 @@ class TestWriteLrc:
     def test_writes_content_to_file(self, tmp_path):
         """Write LRC content and return path."""
         lrc_path = str(tmp_path / "song.lrc")
-        result = _write_lrc(lrc_path, "[00:01.00] Hello", "Artist - Song", "syncedlyrics")
+        result = _write_lrc(
+            lrc_path, "[00:01.00] Hello", "Artist - Song", "syncedlyrics"
+        )
         assert result == lrc_path
-        assert open(lrc_path).read() == "[00:01.00] Hello"
+        assert Path(lrc_path).read_text() == "[00:01.00] Hello"
 
     def test_returns_none_on_write_error(self, tmp_path):
         """Return None when writing fails."""
@@ -160,13 +164,31 @@ class TestLyricsRejectReason:
     @pytest.mark.parametrize(
         "content,reason_part",
         [
-            ("[00:01.00] ♪\n[00:05.00] ♪\n[00:09.00] ♪\n[00:13.00] ♪\n[00:17.00] ♪", "single repeated token"),
-            ("[00:01.00] la la\n[00:02.00] La\n[00:03.00] la la la\n[00:04.00] la\n", "single repeated token"),
-            ("[00:01.00] One line\n[00:02.00] Two lines\n[00:03.00] Three lines\n", "3 timed lines"),
-            ("Plain line one\nPlain line two\nPlain line three\nPlain line four\nFive\n", "0 timed lines"),
-            ("[00:01.00]\n[00:02.00]\n[00:03.00]\n[00:04.00]\n[00:05.00] Hello there\n", "1 timed lines"),
+            (
+                "[00:01.00] ♪\n[00:05.00] ♪\n[00:09.00] ♪\n[00:13.00] ♪\n[00:17.00] ♪",
+                "single repeated token",
+            ),
+            (
+                "[00:01.00] la la\n[00:02.00] La\n[00:03.00] la la la\n[00:04.00] la\n",
+                "single repeated token",
+            ),
+            (
+                "[00:01.00] One line\n[00:02.00] Two lines\n[00:03.00] Three lines\n",
+                "3 timed lines",
+            ),
+            (
+                "Plain line one\nPlain line two\nPlain line three\nPlain line four\nFive\n",
+                "0 timed lines",
+            ),
+            (
+                "[00:01.00]\n[00:02.00]\n[00:03.00]\n[00:04.00]\n[00:05.00] Hello there\n",
+                "1 timed lines",
+            ),
             ("[00:00.00] Lyrics by www.RentAnAdviser.com\n", "advertisement"),
-            ("[00:00.00] https://example.com/lyrics\n[00:01.00]\n[00:02.00]\n[00:03.00]\n", "advertisement"),
+            (
+                "[00:00.00] https://example.com/lyrics\n[00:01.00]\n[00:02.00]\n[00:03.00]\n",
+                "advertisement",
+            ),
             ("", "0 timed lines"),
         ],
     )
@@ -204,11 +226,15 @@ class TestFetchWritesNothingForJunk:
 
     @patch("audio_transcode_watcher.lyrics.syncedlyrics")
     @patch("audio_transcode_watcher.lyrics.extract_metadata")
-    def test_rejected_result_writes_nothing_and_logs_why(self, mock_meta, mock_sl, tmp_path, caplog):
+    def test_rejected_result_writes_nothing_and_logs_why(
+        self, mock_meta, mock_sl, tmp_path, caplog
+    ):
         audio = tmp_path / "Band - Instrumental.flac"
         audio.touch()
         mock_meta.return_value = ("Band", "Instrumental")
-        mock_sl.search.return_value = "[00:00.00] ♪\n[00:10.00] ♪\n[00:20.00] ♪\n[00:30.00] ♪"
+        mock_sl.search.return_value = (
+            "[00:00.00] ♪\n[00:10.00] ♪\n[00:20.00] ♪\n[00:30.00] ♪"
+        )
 
         with caplog.at_level(logging.INFO, logger="audio_transcode_watcher.lyrics"):
             assert fetch_lyrics_for_file(str(audio)) is None
@@ -231,7 +257,9 @@ class TestLrcOwnership:
     @patch("audio_transcode_watcher.lyrics.os.chown")
     @patch("audio_transcode_watcher.lyrics.syncedlyrics")
     @patch("audio_transcode_watcher.lyrics.extract_metadata")
-    def test_chown_to_source_owner_and_mode_0664(self, mock_meta, mock_sl, mock_chown, tmp_path):
+    def test_chown_to_source_owner_and_mode_0664(
+        self, mock_meta, mock_sl, mock_chown, tmp_path
+    ):
         audio = tmp_path / "Etta James - At Last.flac"
         audio.touch()
         mock_meta.return_value = ("Etta James", "At Last")
@@ -243,13 +271,20 @@ class TestLrcOwnership:
         mock_chown.assert_called_once_with(lrc, st.st_uid, st.st_gid)
         assert os.stat(lrc).st_mode & 0o777 == 0o664
 
-    @patch("audio_transcode_watcher.lyrics.os.chown", side_effect=PermissionError("not root"))
-    def test_chown_failure_is_logged_at_debug_and_file_kept(self, _chown, tmp_path, caplog):
+    @patch(
+        "audio_transcode_watcher.lyrics.os.chown",
+        side_effect=PermissionError("not root"),
+    )
+    def test_chown_failure_is_logged_at_debug_and_file_kept(
+        self, _chown, tmp_path, caplog
+    ):
         audio = tmp_path / "song.flac"
         audio.touch()
         lrc_path = str(tmp_path / "song.lrc")
         with caplog.at_level(logging.DEBUG, logger="audio_transcode_watcher.lyrics"):
-            result = _write_lrc(lrc_path, GOOD_LRC, "label", "syncedlyrics", owner_of=str(audio))
+            result = _write_lrc(
+                lrc_path, GOOD_LRC, "label", "syncedlyrics", owner_of=str(audio)
+            )
         assert result == lrc_path
         assert os.path.isfile(lrc_path)
         chown_logs = [r for r in caplog.records if "Could not chown" in r.getMessage()]
@@ -263,7 +298,10 @@ class TestLrcModeFailure:
         audio.touch()
         lrc_path = str(tmp_path / "song.lrc")
         with caplog.at_level(logging.DEBUG, logger="audio_transcode_watcher.lyrics"):
-            assert _write_lrc(lrc_path, GOOD_LRC, "l", "s", owner_of=str(audio)) == lrc_path
+            assert (
+                _write_lrc(lrc_path, GOOD_LRC, "l", "s", owner_of=str(audio))
+                == lrc_path
+            )
         msgs = [r for r in caplog.records if "Could not chmod" in r.getMessage()]
         assert msgs and msgs[0].levelno == logging.DEBUG
 

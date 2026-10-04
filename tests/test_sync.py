@@ -1,12 +1,14 @@
 """Tests for sync module."""
 
+import json
 import os
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
 import audio_transcode_watcher.sync as sync_mod
+from audio_transcode_watcher import manifest
 from audio_transcode_watcher.config import Config, OutputConfig
 from audio_transcode_watcher.sync import (
     _cleanup_orphans,
@@ -37,55 +39,59 @@ def _no_age_guards(monkeypatch):
 
 class TestSafetyGuard:
     """Tests for safety_guard_active function."""
-    
+
     def test_active_when_source_empty(self, temp_dir):
         """Test safety guard is active when source is empty."""
         empty_source = Path(temp_dir) / "empty_source"
         empty_source.mkdir()
-        
+
         output = Path(temp_dir) / "output"
         output.mkdir()
         (output / "file.m4a").touch()
-        
+
         config = Config(
             source_path=str(empty_source),
             outputs=[OutputConfig(name="out", codec="alac", path=str(output))],
         )
-        
+
         assert safety_guard_active(config) is True
-    
-    def test_active_when_output_empty_and_bulk_encode_disabled(self, source_dir, temp_dir):
+
+    def test_active_when_output_empty_and_bulk_encode_disabled(
+        self, source_dir, temp_dir
+    ):
         """Test safety guard is active when output empty and bulk encode disabled."""
         empty_output = Path(temp_dir) / "empty_output"
         empty_output.mkdir()
-        
+
         config = Config(
             source_path=source_dir,
             outputs=[OutputConfig(name="out", codec="alac", path=str(empty_output))],
             allow_initial_bulk_encode=False,  # Disable bulk encoding
         )
-        
+
         assert safety_guard_active(config) is True
-    
-    def test_inactive_when_output_empty_and_bulk_encode_enabled(self, source_dir, temp_dir):
+
+    def test_inactive_when_output_empty_and_bulk_encode_enabled(
+        self, source_dir, temp_dir
+    ):
         """Test safety guard allows empty outputs when bulk encode enabled (default)."""
         empty_output = Path(temp_dir) / "empty_output"
         empty_output.mkdir()
-        
+
         config = Config(
             source_path=source_dir,
             outputs=[OutputConfig(name="out", codec="alac", path=str(empty_output))],
             allow_initial_bulk_encode=True,  # Default behavior
         )
-        
+
         assert safety_guard_active(config) is False
-    
+
     def test_inactive_when_all_have_files(self, source_dir, output_dirs):
         """Test safety guard is inactive when all dirs have files."""
         # Add files to output dirs
         for path in output_dirs.values():
             (Path(path) / "test.m4a").touch()
-        
+
         config = Config(
             source_path=source_dir,
             outputs=[
@@ -93,168 +99,174 @@ class TestSafetyGuard:
                 for name, path in output_dirs.items()
             ],
         )
-        
+
         assert safety_guard_active(config) is False
-    
+
     def test_ignores_hidden_files(self, temp_dir):
         """Test that hidden files are ignored when checking empty."""
         source = Path(temp_dir) / "source"
         source.mkdir()
         (source / ".hidden").touch()  # Hidden file
-        
+
         output = Path(temp_dir) / "output"
         output.mkdir()
         (output / "file.m4a").touch()
-        
+
         config = Config(
             source_path=str(source),
             outputs=[OutputConfig(name="out", codec="alac", path=str(output))],
         )
-        
+
         # Source has only hidden file, should be considered empty
         assert safety_guard_active(config) is True
 
 
 class TestProcessSourceFile:
     """Tests for process_source_file function."""
-    
+
     @patch("audio_transcode_watcher.sync.atomic_ffmpeg_encode")
     @patch("audio_transcode_watcher.sync.safety_guard_active")
-    def test_skips_non_audio_files(self, mock_guard, mock_encode, sample_config, temp_dir):
+    def test_skips_non_audio_files(
+        self, mock_guard, mock_encode, sample_config, temp_dir
+    ):
         """Test that non-audio files are skipped."""
         mock_guard.return_value = False
-        
+
         # Create a non-audio file
         non_audio = Path(temp_dir) / "readme.txt"
         non_audio.write_text("test")
-        
+
         process_source_file(str(non_audio), sample_config, check_stable=False)
-        
+
         mock_encode.assert_not_called()
-    
+
     @patch("audio_transcode_watcher.sync.atomic_ffmpeg_encode")
     @patch("audio_transcode_watcher.sync.safety_guard_active")
-    def test_skips_when_safety_guard_active(self, mock_guard, mock_encode, sample_config, source_dir):
+    def test_skips_when_safety_guard_active(
+        self, mock_guard, mock_encode, sample_config, source_dir
+    ):
         """Test that processing is skipped when safety guard is active."""
         mock_guard.return_value = True
-        
+
         audio_file = Path(source_dir) / "Artist - Song 1.flac"
         process_source_file(str(audio_file), sample_config, check_stable=False)
-        
+
         mock_encode.assert_not_called()
-    
+
     @patch("audio_transcode_watcher.sync.atomic_ffmpeg_encode")
     @patch("audio_transcode_watcher.sync.safety_guard_active")
-    def test_processes_audio_files(self, mock_guard, mock_encode, sample_config, source_dir):
+    def test_processes_audio_files(
+        self, mock_guard, mock_encode, sample_config, source_dir
+    ):
         """Test that audio files are processed."""
         mock_guard.return_value = False
         mock_encode.return_value = 0
-        
+
         audio_file = Path(source_dir) / "Artist - Song 1.flac"
         process_source_file(str(audio_file), sample_config, check_stable=False)
-        
+
         # Should be called for each output (3 outputs)
         assert mock_encode.call_count == 3
 
 
 class TestDeleteOutputs:
     """Tests for delete_outputs function."""
-    
+
     @patch("audio_transcode_watcher.sync.safety_guard_active")
     def test_deletes_matching_files(self, mock_guard, temp_dir):
         """Test that matching output files are deleted."""
         mock_guard.return_value = False
-        
+
         source = Path(temp_dir) / "source"
         source.mkdir()
         (source / "Artist - Song.flac").touch()
-        
+
         output = Path(temp_dir) / "output"
         output.mkdir()
         output_file = output / "Artist - Song.m4a"
         output_file.touch()
-        
+
         config = Config(
             source_path=str(source),
             outputs=[OutputConfig(name="out", codec="alac", path=str(output))],
         )
-        
+
         delete_outputs(str(source / "Artist - Song.flac"), config)
-        
+
         assert not output_file.exists()
-    
+
     @patch("audio_transcode_watcher.sync.safety_guard_active")
     def test_handles_mp3_copies(self, mock_guard, temp_dir):
         """Test deletion of MP3 copies in ALAC folder."""
         mock_guard.return_value = False
-        
+
         source = Path(temp_dir) / "source"
         source.mkdir()
         (source / "Song.mp3").touch()
-        
+
         output = Path(temp_dir) / "output"
         output.mkdir()
         output_file = output / "Song.mp3"
         output_file.touch()
-        
+
         config = Config(
             source_path=str(source),
             outputs=[OutputConfig(name="alac", codec="alac", path=str(output))],
         )
-        
+
         delete_outputs(str(source / "Song.mp3"), config)
-        
+
         assert not output_file.exists()
 
 
 class TestPurgeAllOutputs:
     """Tests for purge_all_outputs function."""
-    
+
     @patch("audio_transcode_watcher.sync.safety_guard_active")
     def test_purges_all_files(self, mock_guard, temp_dir):
         """Test that all output files are purged."""
         mock_guard.return_value = False
-        
+
         source = Path(temp_dir) / "source"
         source.mkdir()
         (source / "file.flac").touch()
-        
+
         output = Path(temp_dir) / "output"
         output.mkdir()
         (output / "file1.m4a").touch()
         (output / "file2.m4a").touch()
-        
+
         config = Config(
             source_path=str(source),
             outputs=[OutputConfig(name="out", codec="alac", path=str(output))],
         )
-        
+
         purge_all_outputs(config)
-        
+
         # All files should be deleted
         assert list(output.glob("*.m4a")) == []
-    
+
     @patch("audio_transcode_watcher.sync.safety_guard_active")
     def test_skips_when_safety_guard_active(self, mock_guard, temp_dir):
         """Test that purge is skipped when safety guard is active."""
         mock_guard.return_value = True
-        
+
         source = Path(temp_dir) / "source"
         source.mkdir()
         (source / "file.flac").touch()
-        
+
         output = Path(temp_dir) / "output"
         output.mkdir()
         test_file = output / "file.m4a"
         test_file.touch()
-        
+
         config = Config(
             source_path=str(source),
             outputs=[OutputConfig(name="out", codec="alac", path=str(output))],
         )
-        
+
         purge_all_outputs(config)
-        
+
         # File should still exist
         assert test_file.exists()
 
@@ -431,6 +443,7 @@ class TestSyncSidecars:
         dst.write_text("lyrics")
         # Make destination newer than source
         import os
+
         os.utime(str(dst), (time.time() + 10, time.time() + 10))
 
         config = Config(
@@ -571,7 +584,11 @@ class TestHasLosslessSource:
 
         config = Config(
             source_path=str(source),
-            outputs=[OutputConfig(name="alac", codec="alac", path=str(Path(temp_dir) / "out"))],
+            outputs=[
+                OutputConfig(
+                    name="alac", codec="alac", path=str(Path(temp_dir) / "out")
+                )
+            ],
         )
         (Path(temp_dir) / "out").mkdir()
 
@@ -586,7 +603,11 @@ class TestHasLosslessSource:
 
         config = Config(
             source_path=str(source),
-            outputs=[OutputConfig(name="alac", codec="alac", path=str(Path(temp_dir) / "out"))],
+            outputs=[
+                OutputConfig(
+                    name="alac", codec="alac", path=str(Path(temp_dir) / "out")
+                )
+            ],
         )
         (Path(temp_dir) / "out").mkdir()
 
@@ -622,7 +643,9 @@ class TestProcessSourceFileMp3Copy:
 
     @patch("audio_transcode_watcher.sync.atomic_ffmpeg_encode")
     @patch("audio_transcode_watcher.sync.safety_guard_active", return_value=False)
-    def test_mp3_skipped_when_lossless_source_exists(self, _guard, mock_encode, temp_dir):
+    def test_mp3_skipped_when_lossless_source_exists(
+        self, _guard, mock_encode, temp_dir
+    ):
         """Skip MP3 for ALAC output when a lossless source with same stem exists."""
         source = Path(temp_dir) / "source"
         source.mkdir()
@@ -650,7 +673,9 @@ class TestProcessSourceFileStability:
     @patch("audio_transcode_watcher.sync.wait_for_stable", return_value=False)
     @patch("audio_transcode_watcher.sync.atomic_ffmpeg_encode")
     @patch("audio_transcode_watcher.sync.safety_guard_active", return_value=False)
-    def test_skips_when_file_not_stable(self, _guard, mock_encode, _stable, source_dir, sample_config):
+    def test_skips_when_file_not_stable(
+        self, _guard, mock_encode, _stable, source_dir, sample_config
+    ):
         """Skip processing when file is not stable."""
         audio_file = Path(source_dir) / "Artist - Song 1.flac"
         process_source_file(str(audio_file), sample_config, check_stable=True)
@@ -701,7 +726,9 @@ class TestProcessSourceFileEncodeFail:
 
         config = Config(
             source_path=str(source),
-            outputs=[OutputConfig(name="mp3", codec="mp3", path=str(out), bitrate="256k")],
+            outputs=[
+                OutputConfig(name="mp3", codec="mp3", path=str(out), bitrate="256k")
+            ],
         )
 
         # Should not raise; just logs the error
@@ -713,10 +740,15 @@ class TestProcessSourceFileLyrics:
     """Tests for lyrics fetching in process_source_file."""
 
     @patch("audio_transcode_watcher.sync.sync_sidecars")
-    @patch("audio_transcode_watcher.sync.fetch_lyrics_for_file", side_effect=Exception("network"))
+    @patch(
+        "audio_transcode_watcher.sync.fetch_lyrics_for_file",
+        side_effect=Exception("network"),
+    )
     @patch("audio_transcode_watcher.sync.atomic_ffmpeg_encode", return_value=0)
     @patch("audio_transcode_watcher.sync.safety_guard_active", return_value=False)
-    def test_lyrics_failure_does_not_stop_processing(self, _guard, _encode, _lyrics, _sync, temp_dir):
+    def test_lyrics_failure_does_not_stop_processing(
+        self, _guard, _encode, _lyrics, _sync, temp_dir
+    ):
         """Lyrics fetch failure does not prevent sync_sidecars from running."""
         source = Path(temp_dir) / "source"
         source.mkdir()
@@ -728,7 +760,9 @@ class TestProcessSourceFileLyrics:
 
         config = Config(
             source_path=str(source),
-            outputs=[OutputConfig(name="mp3", codec="mp3", path=str(out), bitrate="256k")],
+            outputs=[
+                OutputConfig(name="mp3", codec="mp3", path=str(out), bitrate="256k")
+            ],
             fetch_lyrics=True,
         )
 
@@ -755,7 +789,9 @@ class TestProcessSourceFileConcurrency:
 
         config = Config(
             source_path=str(source),
-            outputs=[OutputConfig(name="mp3", codec="mp3", path=str(out), bitrate="256k")],
+            outputs=[
+                OutputConfig(name="mp3", codec="mp3", path=str(out), bitrate="256k")
+            ],
             fetch_lyrics=False,
         )
 
@@ -813,7 +849,11 @@ class TestCleanupStaleTempFiles:
 
         config = Config(
             source_path=str(source),
-            outputs=[OutputConfig(name="out", codec="alac", path=str(Path(temp_dir) / "missing"))],
+            outputs=[
+                OutputConfig(
+                    name="out", codec="alac", path=str(Path(temp_dir) / "missing")
+                )
+            ],
         )
 
         assert cleanup_stale_temp_files(config) == 0
@@ -859,7 +899,9 @@ class TestDeleteOutputsMp3WithLossless:
 
         config = Config(
             source_path=str(source),
-            outputs=[OutputConfig(name="mp3", codec="mp3", path=str(out_mp3), bitrate="256k")],
+            outputs=[
+                OutputConfig(name="mp3", codec="mp3", path=str(out_mp3), bitrate="256k")
+            ],
         )
 
         delete_outputs(str(mp3), config)
@@ -891,7 +933,9 @@ class TestInitialSync:
     @patch("audio_transcode_watcher.sync._cleanup_orphans")
     @patch("audio_transcode_watcher.sync.process_source_file")
     @patch("audio_transcode_watcher.sync.safety_guard_active", return_value=False)
-    def test_processes_source_files_and_cleans_orphans(self, _guard, mock_proc, mock_orphan, temp_dir):
+    def test_processes_source_files_and_cleans_orphans(
+        self, _guard, mock_proc, mock_orphan, temp_dir
+    ):
         """Process all source files and clean up orphans."""
         source = Path(temp_dir) / "source"
         source.mkdir()
@@ -915,7 +959,9 @@ class TestInitialSync:
     @patch("audio_transcode_watcher.sync._cleanup_orphans")
     @patch("audio_transcode_watcher.sync.process_source_file")
     @patch("audio_transcode_watcher.sync.safety_guard_active", return_value=False)
-    def test_skips_orphan_cleanup_when_no_source_files(self, _guard, _proc, mock_orphan, temp_dir):
+    def test_skips_orphan_cleanup_when_no_source_files(
+        self, _guard, _proc, mock_orphan, temp_dir
+    ):
         """Skip orphan cleanup when no source files found to avoid wiping outputs."""
         source = Path(temp_dir) / "source"
         source.mkdir()
@@ -936,7 +982,9 @@ class TestInitialSync:
     @patch("audio_transcode_watcher.sync.purge_all_outputs")
     @patch("audio_transcode_watcher.sync.process_source_file")
     @patch("audio_transcode_watcher.sync.safety_guard_active", return_value=False)
-    def test_purges_when_force_reencode_enabled(self, _guard, _proc, mock_purge, temp_dir):
+    def test_purges_when_force_reencode_enabled(
+        self, _guard, _proc, mock_purge, temp_dir
+    ):
         """Purge all outputs when force_reencode is enabled."""
         source = Path(temp_dir) / "source"
         source.mkdir()
@@ -955,7 +1003,10 @@ class TestInitialSync:
 
         mock_purge.assert_called_once()
 
-    @patch("audio_transcode_watcher.sync.walk_audio_files", side_effect=Exception("disk error"))
+    @patch(
+        "audio_transcode_watcher.sync.walk_audio_files",
+        side_effect=Exception("disk error"),
+    )
     @patch("audio_transcode_watcher.sync.safety_guard_active", return_value=False)
     def test_handles_source_scan_failure(self, _guard, _walk, temp_dir):
         """Gracefully handle failure to scan source directory."""
@@ -1052,6 +1103,11 @@ class TestSyncSidecarsErrorHandling:
 LOSSY = [".mp3", ".aac", ".m4a", ".ogg", ".opus", ".wma"]
 
 
+def _visible(folder):
+    """Files in *folder*, without hidden ones such as the manifest."""
+    return [p for p in sorted(folder.iterdir()) if not p.name.startswith(".")]
+
+
 def _dirs(temp_dir, *names):
     paths = []
     for name in names:
@@ -1067,7 +1123,9 @@ class TestLossySources:
     @pytest.mark.parametrize("ext", LOSSY)
     @patch("audio_transcode_watcher.sync.atomic_ffmpeg_encode")
     @patch("audio_transcode_watcher.sync.safety_guard_active", return_value=False)
-    def test_lossy_source_copied_unchanged_into_alac(self, _guard, mock_encode, temp_dir, ext):
+    def test_lossy_source_copied_unchanged_into_alac(
+        self, _guard, mock_encode, temp_dir, ext
+    ):
         source, out = _dirs(temp_dir, "source", "alac")
         src = source / f"Artist - Title{ext}"
         src.write_bytes(b"lossy bytes with tags " + ext.encode())
@@ -1080,7 +1138,7 @@ class TestLossySources:
         process_source_file(str(src), config, check_stable=False)
 
         mock_encode.assert_not_called()
-        assert [p.name for p in out.iterdir()] == [f"Artist - Title{ext}"]
+        assert [p.name for p in _visible(out)] == [f"Artist - Title{ext}"]
         assert (out / f"Artist - Title{ext}").read_bytes() == src.read_bytes()
 
     @pytest.mark.parametrize(
@@ -1108,7 +1166,13 @@ class TestLossySources:
 
     @pytest.mark.parametrize(
         "ext,codec",
-        [(".ogg", "mp3"), (".mp3", "aac"), (".m4a", "mp3"), (".wma", "opus"), (".opus", "aac")],
+        [
+            (".ogg", "mp3"),
+            (".mp3", "aac"),
+            (".m4a", "mp3"),
+            (".wma", "opus"),
+            (".opus", "aac"),
+        ],
     )
     @patch("audio_transcode_watcher.sync.atomic_ffmpeg_encode", return_value=0)
     @patch("audio_transcode_watcher.sync.safety_guard_active", return_value=False)
@@ -1129,7 +1193,9 @@ class TestLossySources:
     @pytest.mark.parametrize("ext", [".tak", ".aif", ".flac"])
     @patch("audio_transcode_watcher.sync.atomic_ffmpeg_encode", return_value=0)
     @patch("audio_transcode_watcher.sync.safety_guard_active", return_value=False)
-    def test_lossless_source_encoded_with_tag_copy_for_mp4(self, _guard, mock_encode, temp_dir, ext):
+    def test_lossless_source_encoded_with_tag_copy_for_mp4(
+        self, _guard, mock_encode, temp_dir, ext
+    ):
         source, alac, mp3 = _dirs(temp_dir, "source", "alac", "mp3")
         src = source / f"Song{ext}"
         src.touch()
@@ -1145,13 +1211,17 @@ class TestLossySources:
         process_source_file(str(src), config, check_stable=False)
 
         assert mock_encode.call_count == 2
-        by_dest = {c.args[1]: c.kwargs.get("finalize") for c in mock_encode.call_args_list}
+        by_dest = {
+            c.args[1]: c.kwargs.get("finalize") for c in mock_encode.call_args_list
+        }
         assert by_dest[str(alac / "Song.m4a")] is not None
         assert by_dest[str(mp3 / "Song.mp3")] is None
 
     @patch("audio_transcode_watcher.sync.atomic_ffmpeg_encode")
     @patch("audio_transcode_watcher.sync.safety_guard_active", return_value=False)
-    def test_lossy_source_skipped_when_lossless_sibling_exists(self, _guard, mock_encode, temp_dir):
+    def test_lossy_source_skipped_when_lossless_sibling_exists(
+        self, _guard, mock_encode, temp_dir
+    ):
         source, alac, mp3 = _dirs(temp_dir, "source", "alac", "mp3")
         (source / "Song.flac").touch()
         ogg = source / "Song.ogg"
@@ -1168,7 +1238,7 @@ class TestLossySources:
         process_source_file(str(ogg), config, check_stable=False)
 
         mock_encode.assert_not_called()
-        assert list(alac.iterdir()) == [] and list(mp3.iterdir()) == []
+        assert list(_visible(alac)) == [] and list(_visible(mp3)) == []
 
 
 class TestMixedExtensionOrphans:
@@ -1191,7 +1261,7 @@ class TestMixedExtensionOrphans:
 
         _cleanup_orphans(config)
 
-        assert sorted(p.name for p in alac.iterdir()) == sorted(keep)
+        assert sorted(p.name for p in _visible(alac)) == sorted(keep)
 
     def test_lossy_output_keeps_copies_and_transcodes(self, temp_dir):
         source, mp3 = _dirs(temp_dir, "source", "mp3")
@@ -1203,15 +1273,19 @@ class TestMixedExtensionOrphans:
             (mp3 / name).touch()
         config = Config(
             source_path=str(source),
-            outputs=[OutputConfig(name="mp3", codec="mp3", path=str(mp3), bitrate="256k")],
+            outputs=[
+                OutputConfig(name="mp3", codec="mp3", path=str(mp3), bitrate="256k")
+            ],
         )
 
         _cleanup_orphans(config)
 
-        assert sorted(p.name for p in mp3.iterdir()) == sorted(keep)
+        assert sorted(p.name for p in _visible(mp3)) == sorted(keep)
 
     @patch("audio_transcode_watcher.sync.safety_guard_active", return_value=False)
-    def test_deleting_lossy_source_keeps_lossless_output_and_lrc(self, _guard, temp_dir):
+    def test_deleting_lossy_source_keeps_lossless_output_and_lrc(
+        self, _guard, temp_dir
+    ):
         source, alac = _dirs(temp_dir, "source", "alac")
         (source / "Song.flac").touch()
         (source / "Song.lrc").write_text("lyrics")
@@ -1226,7 +1300,7 @@ class TestMixedExtensionOrphans:
         # Song.mp3 was in the source and has just been deleted.
         delete_outputs(str(source / "Song.mp3"), config)
 
-        assert sorted(p.name for p in alac.iterdir()) == ["Song.lrc", "Song.m4a"]
+        assert sorted(p.name for p in _visible(alac)) == ["Song.lrc", "Song.m4a"]
 
     @patch("audio_transcode_watcher.sync.safety_guard_active", return_value=False)
     def test_deleting_last_source_of_stem_removes_lrc(self, _guard, temp_dir):
@@ -1240,7 +1314,7 @@ class TestMixedExtensionOrphans:
 
         delete_outputs(str(source / "Song.ogg"), config)
 
-        assert list(alac.iterdir()) == []
+        assert list(_visible(alac)) == []
 
 
 class TestOrphanRaceGuards:
@@ -1312,7 +1386,9 @@ class TestOrphanRaceGuards:
         assert not copy.exists()
 
     @patch("audio_transcode_watcher.sync.safety_guard_active", return_value=False)
-    def test_file_arriving_during_sync_keeps_its_output(self, _guard, temp_dir, monkeypatch):
+    def test_file_arriving_during_sync_keeps_its_output(
+        self, _guard, temp_dir, monkeypatch
+    ):
         """The 2026-08-06 race: the list was built, a file arrived, the
         watcher encoded it, and the orphan pass deleted the fresh output."""
         monkeypatch.setattr(sync_mod, "_age_seconds", lambda path, now: 1000.0)
@@ -1329,7 +1405,10 @@ class TestOrphanRaceGuards:
             (source / "New.flac").touch()
             (out / "New.m4a").touch()
 
-        with patch("audio_transcode_watcher.sync.process_source_file", side_effect=watcher_meanwhile):
+        with patch(
+            "audio_transcode_watcher.sync.process_source_file",
+            side_effect=watcher_meanwhile,
+        ):
             initial_sync(config, periodic=True)
 
         assert (out / "New.m4a").exists()
@@ -1402,7 +1481,13 @@ class TestFailedSourceMemory:
 class TestSyncLogLabel:
     """The periodic pass no longer logs as if the service restarted."""
 
-    @pytest.mark.parametrize("periodic,label,other", [(True, "Periodic sync", "Initial sync"), (False, "Initial sync", "Periodic sync")])
+    @pytest.mark.parametrize(
+        "periodic,label,other",
+        [
+            (True, "Periodic sync", "Initial sync"),
+            (False, "Initial sync", "Periodic sync"),
+        ],
+    )
     @patch("audio_transcode_watcher.sync.process_source_file")
     @patch("audio_transcode_watcher.sync.safety_guard_active", return_value=False)
     def test_label(self, _guard, _proc, temp_dir, caplog, periodic, label, other):
@@ -1435,8 +1520,19 @@ class TestRealCorruptSource:
         source, out = _dirs(temp_dir, "source", "alac")
         good = source / "good.tmp.flac"
         subprocess.run(
-            ["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi",
-             "-i", "sine=frequency=440:duration=5", "-c:a", "flac", str(good)],
+            [
+                "ffmpeg",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:duration=5",
+                "-c:a",
+                "flac",
+                str(good),
+            ],
             check=True,
         )
         data = bytearray(good.read_bytes())
@@ -1453,7 +1549,7 @@ class TestRealCorruptSource:
 
         process_source_file(str(bad), config, check_stable=False)
 
-        assert list(out.iterdir()) == []
+        assert list(_visible(out)) == []
         assert str(bad) in sync_mod._failed_sources
 
     def test_one_flipped_bit_is_caught(self, temp_dir):
@@ -1463,8 +1559,19 @@ class TestRealCorruptSource:
         source, out = _dirs(temp_dir, "source", "alac")
         good = source / "good.tmp.flac"
         subprocess.run(
-            ["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi",
-             "-i", "sine=frequency=440:duration=5", "-c:a", "flac", str(good)],
+            [
+                "ffmpeg",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:duration=5",
+                "-c:a",
+                "flac",
+                str(good),
+            ],
             check=True,
         )
         data = bytearray(good.read_bytes())
@@ -1480,7 +1587,7 @@ class TestRealCorruptSource:
 
         process_source_file(str(bad), config, check_stable=False)
 
-        assert list(out.iterdir()) == []
+        assert list(_visible(out)) == []
 
 
 class TestLosslessWinsAtProcessTime:
@@ -1511,7 +1618,8 @@ class TestLosslessWinsAtProcessTime:
         flac = source / "X.flac"
         flac.write_bytes(b"flac")
         with patch(
-            "audio_transcode_watcher.sync.atomic_ffmpeg_encode", side_effect=self._fake_encode
+            "audio_transcode_watcher.sync.atomic_ffmpeg_encode",
+            side_effect=self._fake_encode,
         ) as enc:
             process_source_file(str(flac), config, force=False, check_stable=False)
 
@@ -1532,15 +1640,18 @@ class TestLosslessWinsAtProcessTime:
         )
 
         with patch(
-            "audio_transcode_watcher.sync.atomic_ffmpeg_encode", side_effect=self._fake_encode
+            "audio_transcode_watcher.sync.atomic_ffmpeg_encode",
+            side_effect=self._fake_encode,
         ):
             process_source_file(str(source / "X.flac"), config, check_stable=False)
 
-        assert sorted(p.name for p in alac.iterdir()) == ["X.m4a"]
+        assert sorted(p.name for p in _visible(alac)) == ["X.m4a"]
 
     @patch("audio_transcode_watcher.sync.atomic_ffmpeg_encode")
     @patch("audio_transcode_watcher.sync.safety_guard_active", return_value=False)
-    def test_finished_encode_is_not_redone_on_every_scan(self, _guard, mock_encode, temp_dir):
+    def test_finished_encode_is_not_redone_on_every_scan(
+        self, _guard, mock_encode, temp_dir
+    ):
         source, alac = _dirs(temp_dir, "source", "alac")
         (source / "X.m4a").write_bytes(b"lossy AAC from the bot")
         (source / "X.flac").write_bytes(b"flac")
@@ -1568,8 +1679,13 @@ class TestLosslessWinsAtProcessTime:
             fetch_lyrics=False,
         )
 
-        with patch("audio_transcode_watcher.sync.atomic_ffmpeg_encode", return_value=0), \
-             patch("audio_transcode_watcher.sync.os.remove", side_effect=PermissionError("ro")):
+        with (
+            patch("audio_transcode_watcher.sync.atomic_ffmpeg_encode", return_value=0),
+            patch(
+                "audio_transcode_watcher.sync.os.remove",
+                side_effect=PermissionError("ro"),
+            ),
+        ):
             process_source_file(str(source / "X.flac"), config, check_stable=False)
 
         assert "Failed to remove lossy copy" in caplog.text
@@ -1600,10 +1716,12 @@ class TestErrorPaths:
         mp3.write_bytes(b"mp3")
         config = self._config(source, out)
 
-        with patch("audio_transcode_watcher.sync.os.replace", side_effect=OSError("disk full")):
+        with patch(
+            "audio_transcode_watcher.sync.os.replace", side_effect=OSError("disk full")
+        ):
             process_source_file(str(mp3), config, check_stable=False)
 
-        assert list(out.iterdir()) == []
+        assert list(_visible(out)) == []
         assert "Copy failed" in caplog.text
 
     @patch("audio_transcode_watcher.sync.atomic_ffmpeg_encode")
@@ -1613,7 +1731,10 @@ class TestErrorPaths:
         flac.touch()
         config = self._config(source, out)
         # False for process_source_file's own check, True inside the loop.
-        with patch("audio_transcode_watcher.sync.safety_guard_active", side_effect=[False, True]):
+        with patch(
+            "audio_transcode_watcher.sync.safety_guard_active",
+            side_effect=[False, True],
+        ):
             process_source_file(str(flac), config, check_stable=False)
         mock_encode.assert_not_called()
 
@@ -1622,7 +1743,9 @@ class TestErrorPaths:
         source, out = _dirs(temp_dir, "source", "alac")
         (out / "Song.m4a").touch()
         config = self._config(source, out)
-        with patch("audio_transcode_watcher.sync.os.remove", side_effect=PermissionError("ro")):
+        with patch(
+            "audio_transcode_watcher.sync.os.remove", side_effect=PermissionError("ro")
+        ):
             delete_outputs(str(source / "Song.flac"), config)
         assert "Failed to remove" in caplog.text
 
@@ -1631,21 +1754,35 @@ class TestErrorPaths:
         (source / "Song.flac").touch()
         (out / "old.m4a.tmp__ff").touch()
         config = self._config(source, out, parallel_workers=1)
-        with patch("audio_transcode_watcher.sync.safety_guard_active", return_value=False), \
-             patch("audio_transcode_watcher.sync.process_source_file", side_effect=RuntimeError("boom")), \
-             caplog.at_level("INFO", logger="audio_transcode_watcher.sync"):
+        with (
+            patch(
+                "audio_transcode_watcher.sync.safety_guard_active", return_value=False
+            ),
+            patch(
+                "audio_transcode_watcher.sync.process_source_file",
+                side_effect=RuntimeError("boom"),
+            ),
+            caplog.at_level("INFO", logger="audio_transcode_watcher.sync"),
+        ):
             initial_sync(config)
         assert "Cleaned up 1 stale temp files" in caplog.text
         assert "Error processing" in caplog.text and "boom" in caplog.text
 
     @patch("audio_transcode_watcher.sync._cleanup_orphans")
     @patch("audio_transcode_watcher.sync.process_source_file")
-    def test_initial_sync_skips_orphans_when_guard_trips_late(self, _proc, mock_orphans, temp_dir, caplog):
+    def test_initial_sync_skips_orphans_when_guard_trips_late(
+        self, _proc, mock_orphans, temp_dir, caplog
+    ):
         source, out = _dirs(temp_dir, "source", "alac")
         (source / "Song.flac").touch()
         config = self._config(source, out, parallel_workers=1)
-        with patch("audio_transcode_watcher.sync.safety_guard_active", side_effect=[False, True]), \
-             caplog.at_level("INFO", logger="audio_transcode_watcher.sync"):
+        with (
+            patch(
+                "audio_transcode_watcher.sync.safety_guard_active",
+                side_effect=[False, True],
+            ),
+            caplog.at_level("INFO", logger="audio_transcode_watcher.sync"),
+        ):
             initial_sync(config, periodic=True)
         mock_orphans.assert_not_called()
         assert "Periodic sync complete (partial)." in caplog.text
@@ -1653,7 +1790,9 @@ class TestErrorPaths:
     def test_orphans_skip_when_source_scan_fails(self, temp_dir, caplog):
         source, out = _dirs(temp_dir, "source", "alac")
         (out / "Orphan.m4a").touch()
-        with patch("audio_transcode_watcher.sync.walk_audio_files", side_effect=OSError("io")):
+        with patch(
+            "audio_transcode_watcher.sync.walk_audio_files", side_effect=OSError("io")
+        ):
             _cleanup_orphans(self._config(source, out))
         assert (out / "Orphan.m4a").exists()
         assert "Failed to scan source for orphan cleanup" in caplog.text
@@ -1669,7 +1808,9 @@ class TestErrorPaths:
         (source / "Song.flac").touch()
         (out / "Song.mp3").touch()  # orphan once age is known
         (out / "Gone.m4a").touch()
-        with patch("audio_transcode_watcher.sync._age_seconds", side_effect=OSError("stat")):
+        with patch(
+            "audio_transcode_watcher.sync._age_seconds", side_effect=OSError("stat")
+        ):
             _cleanup_orphans(self._config(source, out))
         assert (out / "Song.mp3").exists() and (out / "Gone.m4a").exists()
 
@@ -1677,7 +1818,9 @@ class TestErrorPaths:
         source, out = _dirs(temp_dir, "source", "alac")
         (source / "Song.flac").touch()
         (out / "Gone.m4a").touch()
-        with patch("audio_transcode_watcher.sync.os.remove", side_effect=PermissionError("ro")):
+        with patch(
+            "audio_transcode_watcher.sync.os.remove", side_effect=PermissionError("ro")
+        ):
             _cleanup_orphans(self._config(source, out))
         assert "Failed to remove" in caplog.text
 
@@ -1705,3 +1848,230 @@ class TestErrorPaths:
         with patch("audio_transcode_watcher.sync.os.walk", side_effect=walk):
             _cleanup_orphans(self._config(source, out))
         assert "Failed to scan" in caplog.text and "for orphans" in caplog.text
+
+
+@pytest.fixture
+def fresh_manifests():
+    """Start and end with no cached manifest rows."""
+    manifest._rows.clear()
+    manifest._dirty.clear()
+    manifest._last_write.clear()
+    yield
+    manifest._rows.clear()
+    manifest._dirty.clear()
+    manifest._last_write.clear()
+
+
+def _fake_encode(content):
+    def encode(cmd, dest, **_kwargs):
+        Path(dest).parent.mkdir(parents=True, exist_ok=True)
+        Path(dest).write_bytes(content)
+        return 0
+
+    return encode
+
+
+@pytest.mark.usefixtures("fresh_manifests")
+class TestManifestProvenance:
+    """An output made from a lossy source is replaced when the lossless one arrives."""
+
+    def _setup(self, temp_dir):
+        source, mp3 = _dirs(temp_dir, "source", "mp3")
+        config = Config(
+            source_path=str(source),
+            outputs=[
+                OutputConfig(name="mp3", codec="mp3", path=str(mp3), bitrate="256k")
+            ],
+            fetch_lyrics=False,
+        )
+        return source, mp3, config
+
+    def _ogg_then_flac(self, source, mp3, config, between=None):
+        ogg = source / "X.ogg"
+        ogg.write_bytes(b"ogg")
+        with patch(
+            "audio_transcode_watcher.sync.atomic_ffmpeg_encode",
+            side_effect=_fake_encode(b"from ogg"),
+        ):
+            process_source_file(str(ogg), config, check_stable=False)
+        manifest.flush_all(force=True)
+        assert (mp3 / "X.mp3").read_bytes() == b"from ogg"
+        if between:
+            between()
+        flac = source / "X.flac"
+        flac.write_bytes(b"flac")
+        with patch(
+            "audio_transcode_watcher.sync.atomic_ffmpeg_encode",
+            side_effect=_fake_encode(b"from flac"),
+        ) as enc:
+            process_source_file(str(flac), config, force=False, check_stable=False)
+        return enc
+
+    @patch("audio_transcode_watcher.sync.safety_guard_active", return_value=False)
+    def test_ogg_transcode_then_flac_reencodes(self, _guard, temp_dir):
+        source, mp3, config = self._setup(temp_dir)
+
+        def restart():  # rows must come back from disk, not memory
+            manifest._rows.clear()
+
+        enc = self._ogg_then_flac(source, mp3, config, between=restart)
+
+        enc.assert_called_once()
+        assert (mp3 / "X.mp3").read_bytes() == b"from flac"
+        manifest.flush_all(force=True)
+        rows = json.loads((mp3 / ".atw-manifest.json").read_text())
+        assert rows["X.mp3"]["kind"] == "encode"
+        assert rows["X.mp3"]["source"] == "X.flac"
+        assert rows["X.mp3"]["size"] == 4
+
+    @patch("audio_transcode_watcher.sync.safety_guard_active", return_value=False)
+    def test_missing_manifest_behaves_as_before(self, _guard, temp_dir):
+        source, mp3, config = self._setup(temp_dir)
+
+        def lose_manifest():
+            (mp3 / ".atw-manifest.json").unlink()
+            manifest._rows.clear()
+
+        enc = self._ogg_then_flac(source, mp3, config, between=lose_manifest)
+
+        enc.assert_not_called()
+        assert (mp3 / "X.mp3").read_bytes() == b"from ogg"
+
+    @patch("audio_transcode_watcher.sync.safety_guard_active", return_value=False)
+    def test_unreadable_manifest_behaves_as_before(self, _guard, temp_dir, caplog):
+        source, mp3, config = self._setup(temp_dir)
+
+        def corrupt():
+            (mp3 / ".atw-manifest.json").write_text("{not json")
+            manifest._rows.clear()
+
+        enc = self._ogg_then_flac(source, mp3, config, between=corrupt)
+
+        enc.assert_not_called()
+        assert "Ignoring unreadable manifest" in caplog.text
+
+    @patch("audio_transcode_watcher.sync.atomic_ffmpeg_encode")
+    @patch("audio_transcode_watcher.sync.safety_guard_active", return_value=False)
+    def test_encode_from_lossless_is_kept(self, _guard, mock_encode, temp_dir):
+        source, mp3, config = self._setup(temp_dir)
+        flac = source / "X.flac"
+        flac.write_bytes(b"flac")
+        (mp3 / "X.mp3").write_bytes(b"from flac")
+        manifest.record(str(mp3), str(mp3 / "X.mp3"), str(source), str(flac), "encode")
+
+        process_source_file(str(flac), config, check_stable=False)
+
+        mock_encode.assert_not_called()
+
+    @patch("audio_transcode_watcher.sync.safety_guard_active", return_value=False)
+    def test_copy_is_recorded(self, _guard, temp_dir):
+        source, alac = _dirs(temp_dir, "source", "alac")
+        mp3 = source / "Song.mp3"
+        mp3.write_bytes(b"mp3")
+        config = Config(
+            source_path=str(source),
+            outputs=[OutputConfig(name="alac", codec="alac", path=str(alac))],
+            fetch_lyrics=False,
+        )
+        process_source_file(str(mp3), config, check_stable=False)
+        assert manifest.lookup(str(alac), str(alac / "Song.mp3"))["kind"] == "copy"
+
+    def test_orphan_pass_drops_rows_whose_output_is_gone(self, temp_dir):
+        source, alac = _dirs(temp_dir, "source", "alac")
+        (source / "Keep.flac").touch()
+        (alac / "Keep.m4a").touch()
+        rows = {
+            "Keep.m4a": {
+                "source": "Keep.flac",
+                "size": 0,
+                "mtime": 0,
+                "kind": "encode",
+            },
+            "Gone.m4a": {
+                "source": "Gone.flac",
+                "size": 0,
+                "mtime": 0,
+                "kind": "encode",
+            },
+        }
+        (alac / ".atw-manifest.json").write_text(json.dumps(rows))
+        config = Config(
+            source_path=str(source),
+            outputs=[OutputConfig(name="alac", codec="alac", path=str(alac))],
+        )
+
+        _cleanup_orphans(config)
+
+        assert (alac / ".atw-manifest.json").exists()  # never treated as an orphan
+        assert set(json.loads((alac / ".atw-manifest.json").read_text())) == {
+            "Keep.m4a"
+        }
+
+    @patch("audio_transcode_watcher.sync.safety_guard_active", return_value=False)
+    def test_purge_forgets_cached_rows(self, _guard, temp_dir):
+        source, alac = _dirs(temp_dir, "source", "alac")
+        (source / "X.flac").touch()
+        manifest.record(
+            str(alac),
+            str(alac / "X.m4a"),
+            str(source),
+            str(source / "X.flac"),
+            "transcode",
+        )
+        purge_all_outputs(
+            Config(
+                source_path=str(source),
+                outputs=[OutputConfig(name="alac", codec="alac", path=str(alac))],
+            )
+        )
+        assert manifest.lookup(str(alac), str(alac / "X.m4a")) is None
+
+
+@pytest.mark.usefixtures("fresh_manifests")
+class TestLimitsAndProvenanceEdges:
+    """Follow-ups from review: over-limit lossy copies and stale manifest rows."""
+
+    @pytest.mark.parametrize(
+        "name,shape,expected",
+        [
+            ("X.m4a", (44100, 2), ("X.m4a", "copy")),
+            ("X.m4a", (96000, 2), ("X.m4a", "encode")),
+            ("X.m4a", (48000, 6), ("X.m4a", "encode")),
+            ("X.aac", (96000, 2), ("X.m4a", "encode")),
+        ],
+    )
+    def test_over_limit_aac_source_is_transcoded(self, name, shape, expected):
+        aac = OutputConfig(name="aac", codec="aac", path="/out")
+        with patch("audio_transcode_watcher.encoder._probe_shape", return_value=shape):
+            assert sync_mod.plan_output(f"/src/{name}", aac) == expected
+
+    def test_lossy_into_lossless_is_never_probed(self):
+        alac = OutputConfig(name="alac", codec="alac", path="/out")
+        with patch("audio_transcode_watcher.encoder._probe_shape") as probe:
+            assert sync_mod.plan_output("/src/X.m4a", alac) == ("X.m4a", "copy")
+        probe.assert_not_called()
+
+    @patch("audio_transcode_watcher.sync.safety_guard_active", return_value=False)
+    def test_edited_output_is_not_replaced(self, _guard, temp_dir):
+        source, mp3 = _dirs(temp_dir, "source", "mp3")
+        config = Config(
+            source_path=str(source),
+            outputs=[
+                OutputConfig(name="mp3", codec="mp3", path=str(mp3), bitrate="256k")
+            ],
+            fetch_lyrics=False,
+        )
+        (source / "X.ogg").write_bytes(b"ogg")
+        with patch(
+            "audio_transcode_watcher.sync.atomic_ffmpeg_encode",
+            side_effect=_fake_encode(b"from ogg"),
+        ):
+            process_source_file(str(source / "X.ogg"), config, check_stable=False)
+        (mp3 / "X.mp3").write_bytes(b"edited by hand, longer")
+        (source / "X.flac").write_bytes(b"flac")
+
+        with patch("audio_transcode_watcher.sync.atomic_ffmpeg_encode") as enc:
+            process_source_file(str(source / "X.flac"), config, check_stable=False)
+
+        enc.assert_not_called()
+        assert (mp3 / "X.mp3").read_bytes() == b"edited by hand, longer"

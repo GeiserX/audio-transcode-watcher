@@ -35,7 +35,7 @@ Keep one library in several formats: lossless for the archive, lossy for phones 
 curl -fsSL -o config.yaml https://raw.githubusercontent.com/GeiserX/audio-transcode-watcher/main/config.example.yaml
 docker run -d --name audio_transcoder -e CONFIG_FILE=/app/config.yaml \
   -v ./config.yaml:/app/config.yaml:ro -v /path/to/flac:/music/flac:ro -v /path/to/mp3:/music/mp3 \
-  drumsergio/audio-transcoder:0.6.0
+  drumsergio/audio-transcoder:0.6.1
 ```
 
 Edit `config.yaml` first so its outputs match the folders you mount; the example writes ALAC, MP3 and AAC. [Getting started](https://github.com/GeiserX/audio-transcode-watcher/blob/main/docs/getting-started.md) has Docker Compose and the full `docker run`.

@@ -1,6 +1,6 @@
 # Roadmap
 
-Current version: **0.6.0**
+Current version: **0.6.1**
 
 ## Completed
 
@@ -12,6 +12,7 @@ Current version: **0.6.0**
 - **Whisper local transcription fallback** for lyrics (v0.4.0, removed in v0.6.0)
 - **Recursive directory support** -- mirror source folder hierarchy in outputs (v0.5.0)
 - **Lossy sources copied, not inflated**, corrupt sources fail loudly, ReplayGain and MusicBrainz tags kept in M4A outputs, configurable periodic sync (v0.6.0)
+- **Portable AAC**: stereo downmix and a 48 kHz cap for AAC outputs, per-output `channels` and `max_sample_rate` (v0.6.1)
 
 ## v0.7.0 -- Quality of Life
 

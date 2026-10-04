@@ -11,8 +11,14 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
+from . import manifest
 from .config import Config, OutputConfig
-from .encoder import atomic_ffmpeg_encode, build_ffmpeg_command, copy_mp4_tags
+from .encoder import (
+    atomic_ffmpeg_encode,
+    build_ffmpeg_command,
+    copy_mp4_tags,
+    portable_limit_args,
+)
 from .lyrics import fetch_lyrics_for_file
 from .utils import (
     AUDIO_EXTENSIONS,
@@ -30,8 +36,8 @@ from .utils import (
     nfc,
     nfc_path,
     remove_empty_dirs,
-    walk_audio_files,
     wait_for_stable,
+    walk_audio_files,
 )
 
 # Default number of parallel encoding workers (can be overridden in config)
@@ -67,14 +73,14 @@ _SAFETY_LOG_INTERVAL = 10.0
 def safety_guard_active(config: Config) -> bool:
     """
     Check if safety guard should prevent operations.
-    
+
     Safety guard activates if source appears empty.
     Empty destinations are allowed if allow_initial_bulk_encode is True.
     """
     global _last_safety_log_ts
-    
+
     src_empty = appears_empty_dir(config.source_path)
-    
+
     # Source being empty is always a problem
     if src_empty:
         now = time.time()
@@ -82,14 +88,14 @@ def safety_guard_active(config: Config) -> bool:
             logger.warning("Safety guard active: source directory appears empty")
             _last_safety_log_ts = now
         return True
-    
+
     # Empty destinations are OK if allow_initial_bulk_encode is True
     if config.allow_initial_bulk_encode:
         return False
-    
+
     # Otherwise, check destinations
     dest_empty = {o.name: appears_empty_dir(o.path) for o in config.outputs}
-    
+
     if any(dest_empty.values()):
         now = time.time()
         if now - _last_safety_log_ts >= _SAFETY_LOG_INTERVAL:
@@ -100,7 +106,7 @@ def safety_guard_active(config: Config) -> bool:
             )
             _last_safety_log_ts = now
         return True
-    
+
     return False
 
 
@@ -112,7 +118,7 @@ def process_source_file(
 ) -> None:
     """
     Process a source file and create all configured outputs.
-    
+
     Args:
         source_path: Path to source audio file
         config: Configuration
@@ -120,13 +126,13 @@ def process_source_file(
         check_stable: If True, wait for file to be stable first
     """
     source_path = nfc_path(source_path)
-    
+
     if not is_audio_file(source_path):
         return
-    
+
     if safety_guard_active(config):
         return
-    
+
     # Wait for file to stabilize if needed
     if check_stable and not wait_for_stable(
         source_path,
@@ -135,7 +141,7 @@ def process_source_file(
     ):
         logger.warning("Source not stable or disappeared: %s", source_path)
         return
-    
+
     if _is_known_failure(source_path):
         logger.debug("Skipping %s: it failed before and has not changed", source_path)
         return
@@ -145,7 +151,7 @@ def process_source_file(
         if source_path in _in_progress:
             return
         _in_progress.add(source_path)
-    
+
     try:
         if not _process_outputs(source_path, config, force):
             _remember_failure(source_path)
@@ -159,6 +165,7 @@ def process_source_file(
     finally:
         with _in_progress_lock:
             _in_progress.discard(source_path)
+        manifest.flush_all()
 
 
 def _is_known_failure(source_path: str) -> bool:
@@ -191,7 +198,7 @@ def _has_lossless_source(source_path: str, config: Config) -> bool:
     """Check if a lossless source with the same stem exists."""
     stem = Path(source_path).stem
     source_dir = os.path.dirname(source_path)
-    
+
     for ext in LOSSLESS_EXTENSIONS:
         lossless_path = os.path.join(source_dir, f"{stem}{ext}")
         if os.path.exists(lossless_path) and lossless_path != source_path:
@@ -223,7 +230,9 @@ def _remove_lossy_copies(
     lossy source, so a finished encode is never thrown away.
     """
     own_name, _ = plan_output(source_path, output)
-    own_path = get_output_file_path(source_path, config.source_path, output.path, own_name)
+    own_path = get_output_file_path(
+        source_path, config.source_path, output.path, own_name
+    )
     for sibling in siblings:
         name, action = plan_output(sibling, output)
         if action != "copy":
@@ -232,9 +241,13 @@ def _remove_lossy_copies(
         try:
             if not os.path.exists(copy_path):
                 continue
-            if copy_path == own_path and not filecmp.cmp(sibling, copy_path, shallow=True):
+            if copy_path == own_path and not filecmp.cmp(
+                sibling, copy_path, shallow=True
+            ):
                 continue
-            logger.info("✘ remove lossy copy %s (lossless %s wins)", copy_path, source_path)
+            logger.info(
+                "✘ remove lossy copy %s (lossless %s wins)", copy_path, source_path
+            )
             os.remove(copy_path)
         except OSError as e:
             logger.error("Failed to remove lossy copy %s: %s", copy_path, e)
@@ -261,10 +274,15 @@ def plan_output(source_path: str, output: OutputConfig) -> tuple[str, str]:
     - a lossy source is copied unchanged (same extension) into a lossless
       output, since encoding it would only inflate it;
     - a lossy source is copied unchanged into a lossy output of the same
-      codec, and transcoded into a lossy output of another codec.
+      codec, unless it exceeds the output's channel or sample-rate limit,
+      and transcoded into a lossy output of another codec.
     """
     if not is_lossless(source_path):
-        if output.is_lossless or lossy_source_codec(source_path) == output.codec:
+        if output.is_lossless:
+            return nfc(os.path.basename(source_path)), "copy"
+        if lossy_source_codec(source_path) == output.codec and not portable_limit_args(
+            source_path, output
+        ):
             return nfc(os.path.basename(source_path)), "copy"
     return get_output_filename(source_path, output.extension), "encode"
 
@@ -287,6 +305,21 @@ def _atomic_copy(source_path: str, out_path: str) -> bool:
         return False
 
 
+def _made_from_lossy(output: OutputConfig, out_path: str) -> bool:
+    """True if the manifest says *out_path* came from a lossy source.
+
+    Unknown (no manifest, no row) is False, which keeps today's behaviour.
+    """
+    row = manifest.lookup(output.path, out_path)
+    if not row or row.get("kind") not in ("copy", "transcode"):
+        return False
+    # Trust the row only while the file is still the one it describes.
+    if not manifest.output_matches(row, out_path):
+        logger.debug("Manifest row for %s is stale; leaving the file alone", out_path)
+        return False
+    return True
+
+
 def _process_outputs(source_path: str, config: Config, force: bool) -> bool:
     """
     Process all outputs for a source file.
@@ -306,26 +339,44 @@ def _process_outputs(source_path: str, config: Config, force: bool) -> bool:
 
         out_filename, action = plan_output(source_path, output)
         out_path = get_output_file_path(
-            source_path, config.source_path, output.path, out_filename,
+            source_path,
+            config.source_path,
+            output.path,
+            out_filename,
         )
         if siblings:
             _remove_lossy_copies(source_path, siblings, output, config)
         if not force and os.path.exists(out_path):
-            continue
+            if not (is_lossless(source_path) and _made_from_lossy(output, out_path)):
+                continue
+            logger.info(
+                "Replacing %s: it was made from a lossy source, %s wins",
+                out_path,
+                source_path,
+            )
 
         os.makedirs(os.path.dirname(out_path), exist_ok=True)
         if action == "copy":
-            _atomic_copy(source_path, out_path)
+            if _atomic_copy(source_path, out_path):
+                manifest.record(
+                    output.path, out_path, config.source_path, source_path, "copy"
+                )
             continue
 
         finalize = None
         if output.codec in _MP4_CODECS:
+
             def finalize(tmp: str, src: str = source_path) -> None:
                 copy_mp4_tags(src, tmp)
 
         cmd = build_ffmpeg_command(source_path, out_path, output)
         rc = atomic_ffmpeg_encode(cmd, out_path, finalize=finalize)
-        if rc != 0:
+        if rc == 0:
+            kind = "encode" if is_lossless(source_path) else "transcode"
+            manifest.record(
+                output.path, out_path, config.source_path, source_path, kind
+            )
+        else:
             logger.error(
                 "%s encode failed for %s",
                 output.name.upper(),
@@ -346,8 +397,8 @@ def delete_outputs(source_path: str, config: Config) -> None:
     if safety_guard_active(config):
         return
 
-    lossless_sibling = (
-        not is_lossless(source_path) and _has_lossless_source(source_path, config)
+    lossless_sibling = not is_lossless(source_path) and _has_lossless_source(
+        source_path, config
     )
 
     for output in config.outputs:
@@ -360,7 +411,10 @@ def delete_outputs(source_path: str, config: Config) -> None:
             continue
 
         filepath = get_output_file_path(
-            source_path, config.source_path, output.path, filename,
+            source_path,
+            config.source_path,
+            output.path,
+            filename,
         )
         if os.path.exists(filepath):
             try:
@@ -398,18 +452,25 @@ def sync_sidecars(source_path: str, config: Config) -> None:
         sidecar_filename = f"{stem}{ext}"
         for output in config.outputs:
             sidecar_dst = get_output_file_path(
-                source_path, config.source_path, output.path, sidecar_filename,
+                source_path,
+                config.source_path,
+                output.path,
+                sidecar_filename,
             )
             try:
                 needs_copy = not os.path.exists(sidecar_dst)
                 if not needs_copy:
-                    needs_copy = os.path.getmtime(sidecar_src) > os.path.getmtime(sidecar_dst)
+                    needs_copy = os.path.getmtime(sidecar_src) > os.path.getmtime(
+                        sidecar_dst
+                    )
                 if needs_copy:
                     os.makedirs(os.path.dirname(sidecar_dst), exist_ok=True)
                     shutil.copy2(sidecar_src, sidecar_dst)
                     logger.info("► copy sidecar %s → %s", sidecar_src, sidecar_dst)
             except Exception as e:
-                logger.error("Failed to copy sidecar %s → %s: %s", sidecar_src, sidecar_dst, e)
+                logger.error(
+                    "Failed to copy sidecar %s → %s: %s", sidecar_src, sidecar_dst, e
+                )
 
 
 def delete_sidecars(source_path: str, config: Config) -> None:
@@ -421,7 +482,10 @@ def delete_sidecars(source_path: str, config: Config) -> None:
         sidecar_filename = f"{stem}{ext}"
         for output in config.outputs:
             sidecar_path = get_output_file_path(
-                source_path, config.source_path, output.path, sidecar_filename,
+                source_path,
+                config.source_path,
+                output.path,
+                sidecar_filename,
             )
             if os.path.exists(sidecar_path):
                 try:
@@ -486,6 +550,7 @@ def purge_all_outputs(config: Config) -> None:
                         os.remove(full)
                     except Exception as e:
                         logger.error("Failed to purge %s: %s", full, e)
+            manifest.forget(output.path)
             remove_empty_dirs(output.path)
         except Exception as e:
             logger.error("Failed to purge folder %s: %s", output.path, e)
@@ -530,8 +595,10 @@ def initial_sync(config: Config, periodic: bool = False) -> None:
         return
 
     # Process all source files in parallel (skip stability check - files are on disk)
-    workers = getattr(config, 'parallel_workers', DEFAULT_PARALLEL_WORKERS)
-    logger.info("Processing %d source files with %d workers…", len(source_files), workers)
+    workers = getattr(config, "parallel_workers", DEFAULT_PARALLEL_WORKERS)
+    logger.info(
+        "Processing %d source files with %d workers…", len(source_files), workers
+    )
 
     def process_one(src_file: str) -> None:
         try:
@@ -551,9 +618,12 @@ def initial_sync(config: Config, periodic: bool = False) -> None:
         return
 
     if not source_files:
-        logger.warning("No source files found; skipping orphan cleanup to avoid wiping outputs.")
+        logger.warning(
+            "No source files found; skipping orphan cleanup to avoid wiping outputs."
+        )
     else:
         _cleanup_orphans(config)
+    manifest.flush_all(force=True)
     logger.info("%s complete.", label)
 
 
@@ -581,7 +651,9 @@ def _cleanup_orphans(config: Config) -> None:
         logger.error("Failed to scan source for orphan cleanup: %s", e)
         return
     if not source_files:
-        logger.warning("No source files found; skipping orphan cleanup to avoid wiping outputs.")
+        logger.warning(
+            "No source files found; skipping orphan cleanup to avoid wiping outputs."
+        )
         return
 
     now = time.time()
@@ -647,6 +719,9 @@ def _cleanup_orphans(config: Config) -> None:
         except Exception as e:
             logger.error("Failed to scan %s for orphans: %s", output.path, e)
 
-    # Remove empty subdirectories left after orphan cleanup
+    # Remove empty subdirectories left after orphan cleanup, and forget
+    # manifest rows whose output is gone
     for output in config.outputs:
         remove_empty_dirs(output.path)
+        manifest.prune(output.path)
+        manifest.flush(output.path, force=True)

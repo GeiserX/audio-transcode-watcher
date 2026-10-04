@@ -11,6 +11,10 @@
 
 Lossy sources are copied rather than encoded where that keeps quality honest; see [Source formats](configuration.md#source-formats).
 
+## Provenance manifest
+
+Each output folder holds `.atw-manifest.json`, a map from each output file to the source that made it (path, size, modification time) and how: `encode`, `copy` or `transcode`. It is written in batches at most every 5 seconds and at the end of each sync. It is only used to replace a file made from a lossy source once a lossless source of the same name appears. A missing or unreadable manifest just means "unknown".
+
 ## Corrupt sources
 
 FFmpeg runs with `-xerror` and `-err_detect crccheck+explode`, so a frame whose checksum does not match stops the encode. If a source does not decode cleanly, the encode fails even when FFmpeg exits 0 but printed a decode error. The error is logged with the file name and no output is written. The file is not tried again until its modification time changes, or the service restarts.

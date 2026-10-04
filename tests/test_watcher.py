@@ -1,10 +1,8 @@
 """Tests for the watcher module."""
 
-import os
 import time
-from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -171,7 +169,9 @@ class TestProcessLater:
     @patch("audio_transcode_watcher.watcher.safety_guard_active", return_value=True)
     @patch("audio_transcode_watcher.watcher.is_audio_file", return_value=True)
     @patch("time.sleep")
-    def test_skips_when_safety_guard_active(self, _sleep, _is_audio, _safety, mock_proc, handler):
+    def test_skips_when_safety_guard_active(
+        self, _sleep, _is_audio, _safety, mock_proc, handler
+    ):
         """Skip processing when safety guard is active."""
         handler._process_later("/music/source/song.flac")
         mock_proc.assert_not_called()
@@ -184,7 +184,9 @@ class TestOnCreatedAudio:
     @patch("audio_transcode_watcher.watcher.safety_guard_active", return_value=False)
     @patch("audio_transcode_watcher.watcher.is_audio_file", return_value=True)
     @patch("time.sleep")
-    def test_processes_audio_on_create(self, _sleep, _is_audio, _safety, mock_proc, handler):
+    def test_processes_audio_on_create(
+        self, _sleep, _is_audio, _safety, mock_proc, handler
+    ):
         """Audio files trigger _process_later on create."""
         handler.on_created(_event("/music/source/new_song.flac"))
         mock_proc.assert_called_once()
@@ -209,12 +211,16 @@ class TestOnMoved:
     @patch("audio_transcode_watcher.watcher.is_audio_file", return_value=True)
     @patch("audio_transcode_watcher.watcher.delete_outputs")
     @patch("time.sleep")
-    def test_moves_audio_file(self, _sleep, mock_del, _is_audio, _safety, mock_proc, handler):
+    def test_moves_audio_file(
+        self, _sleep, mock_del, _is_audio, _safety, mock_proc, handler
+    ):
         """Delete old outputs and process new location on audio file move."""
-        handler.on_moved(_event(
-            "/music/source/old.flac",
-            dest_path="/music/source/new.flac",
-        ))
+        handler.on_moved(
+            _event(
+                "/music/source/old.flac",
+                dest_path="/music/source/new.flac",
+            )
+        )
         mock_del.assert_called_once()
         mock_proc.assert_called_once()
 
@@ -222,10 +228,12 @@ class TestOnMoved:
     @patch("audio_transcode_watcher.watcher.delete_sidecars")
     def test_moves_sidecar_file(self, mock_del_sc, mock_sync_sc, handler):
         """Delete old sidecars and sync new sidecars on sidecar move."""
-        handler.on_moved(_event(
-            "/music/source/song.lrc",
-            dest_path="/music/source/renamed.lrc",
-        ))
+        handler.on_moved(
+            _event(
+                "/music/source/song.lrc",
+                dest_path="/music/source/renamed.lrc",
+            )
+        )
         mock_del_sc.assert_called_once()
         mock_sync_sc.assert_called_once()
 
@@ -233,10 +241,12 @@ class TestOnMoved:
     @patch("audio_transcode_watcher.watcher.delete_sidecars")
     def test_move_from_sidecar_to_non_sidecar(self, mock_del_sc, mock_sync_sc, handler):
         """Delete old sidecar, no sync when dest is not a sidecar."""
-        handler.on_moved(_event(
-            "/music/source/song.lrc",
-            dest_path="/music/source/song.txt",
-        ))
+        handler.on_moved(
+            _event(
+                "/music/source/song.lrc",
+                dest_path="/music/source/song.txt",
+            )
+        )
         mock_del_sc.assert_called_once()
         mock_sync_sc.assert_not_called()
 
@@ -244,10 +254,12 @@ class TestOnMoved:
     @patch("audio_transcode_watcher.watcher.delete_sidecars")
     def test_move_from_non_sidecar_to_sidecar(self, mock_del_sc, mock_sync_sc, handler):
         """Sync new sidecar when moving from non-sidecar to sidecar."""
-        handler.on_moved(_event(
-            "/music/source/song.txt",
-            dest_path="/music/source/song.lrc",
-        ))
+        handler.on_moved(
+            _event(
+                "/music/source/song.txt",
+                dest_path="/music/source/song.lrc",
+            )
+        )
         mock_del_sc.assert_not_called()
         mock_sync_sc.assert_called_once()
 
@@ -255,11 +267,13 @@ class TestOnMoved:
     @patch("audio_transcode_watcher.watcher.AudioSyncHandler._handle_directory_delete")
     def test_moves_directory(self, mock_handle_del, mock_reprocess, handler):
         """Handle directory move: delete old + reprocess new."""
-        handler.on_moved(_event(
-            "/music/source/old_album",
-            is_directory=True,
-            dest_path="/music/source/new_album",
-        ))
+        handler.on_moved(
+            _event(
+                "/music/source/old_album",
+                is_directory=True,
+                dest_path="/music/source/new_album",
+            )
+        )
         mock_handle_del.assert_called_once_with("/music/source/old_album")
         # _reprocess_directory is called in a thread, but we patched it at class level
 
@@ -267,10 +281,12 @@ class TestOnMoved:
     @patch("audio_transcode_watcher.watcher.is_audio_file", return_value=False)
     def test_move_non_audio_src_to_non_audio_dest(self, _is_audio, mock_del, handler):
         """Moving non-audio to non-audio does nothing."""
-        handler.on_moved(_event(
-            "/music/source/readme.txt",
-            dest_path="/music/source/readme2.txt",
-        ))
+        handler.on_moved(
+            _event(
+                "/music/source/readme.txt",
+                dest_path="/music/source/readme2.txt",
+            )
+        )
         mock_del.assert_not_called()
 
 
@@ -334,7 +350,9 @@ class TestReprocessDirectory:
     @patch("audio_transcode_watcher.watcher.safety_guard_active", return_value=False)
     @patch("audio_transcode_watcher.watcher.is_audio_file", return_value=True)
     @patch("time.sleep")
-    def test_reprocesses_all_audio_files(self, _sleep, _is_audio, _safety, mock_proc, tmp_path):
+    def test_reprocesses_all_audio_files(
+        self, _sleep, _is_audio, _safety, mock_proc, tmp_path
+    ):
         """Reprocess all audio files found in directory."""
         src = tmp_path / "source"
         src.mkdir()
@@ -345,7 +363,9 @@ class TestReprocessDirectory:
 
         config = Config(
             source_path=str(src),
-            outputs=[OutputConfig(name="mp3", codec="mp3", path=str(out), bitrate="192k")],
+            outputs=[
+                OutputConfig(name="mp3", codec="mp3", path=str(out), bitrate="192k")
+            ],
         )
         h = AudioSyncHandler(config)
         h._reprocess_directory(str(src))
@@ -364,7 +384,9 @@ class TestStartWatcher:
         out.mkdir()
         config = Config(
             source_path=str(src),
-            outputs=[OutputConfig(name="mp3", codec="mp3", path=str(out), bitrate="192k")],
+            outputs=[
+                OutputConfig(name="mp3", codec="mp3", path=str(out), bitrate="192k")
+            ],
         )
         observer = start_watcher(config)
         assert observer.is_alive()
