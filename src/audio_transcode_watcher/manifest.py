@@ -4,11 +4,14 @@ Each output folder holds ``.atw-manifest.json``, mapping an output file's
 path (relative to the output folder) to the source that produced it::
 
     {"Artist/X.mp3": {"source": "Artist/X.ogg", "size": 4123456,
-                      "mtime": 1790000000.0, "kind": "transcode"}}
+                      "mtime": 1790000000.0, "kind": "transcode",
+                      "output_size": 3801234, "output_mtime": 1790000050.0}}
 
 ``kind`` is ``"encode"`` (from a lossless source), ``"copy"`` (a lossy source
 copied unchanged) or ``"transcode"`` (a lossy source re-encoded to another
-lossy codec). The manifest is advisory: a missing or unreadable one means
+lossy codec). ``output_size`` and ``output_mtime`` describe the output file
+as written; a row whose file no longer matches them is not trusted. The
+manifest is advisory: a missing or unreadable one means
 "unknown", and every caller then behaves as if it did not exist.
 """
 
@@ -78,15 +81,35 @@ def record(
         size, mtime = st.st_size, st.st_mtime
     except OSError:
         size, mtime = None, None
+    try:
+        out = os.stat(out_path)
+        output_size, output_mtime = out.st_size, out.st_mtime
+    except OSError:
+        output_size, output_mtime = None, None
     row = {
         "source": nfc_path(os.path.relpath(source_path, source_root)),
         "size": size,
         "mtime": mtime,
         "kind": kind,
+        "output_size": output_size,
+        "output_mtime": output_mtime,
     }
     with _lock:
         _load(root)[_key(root, out_path)] = row
         _dirty.add(root)
+
+
+def output_matches(row: dict, out_path: str) -> bool:
+    """True if *out_path* still has the size and mtime recorded in *row*."""
+    try:
+        st = os.stat(out_path)
+    except OSError:
+        return False
+    return (
+        row.get("output_size") is not None
+        and st.st_size == row.get("output_size")
+        and st.st_mtime == row.get("output_mtime")
+    )
 
 
 def prune(root: str) -> int:

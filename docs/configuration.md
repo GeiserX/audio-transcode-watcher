@@ -92,7 +92,7 @@ Each output can cap the channel count and the sample rate:
 
 `aac` outputs get `channels: 2` and `max_sample_rate: 48000` when they don't set them, because they are for phones, AirPods and CarPlay. Every other codec has no limit unless you set one, and `0` turns a limit off (also for `aac`).
 
-The sample rate never goes up, and a rate above the cap drops within its own family: 88.2 and 176.4 kHz become 44.1 kHz, 96 and 192 kHz become 48 kHz. A rate from neither family goes to the cap. A mono or stereo source is never upmixed. ALAC and the other lossless outputs keep the source's rate and channels.
+The sample rate never goes up, and a rate above the cap drops within its own family: 88.2 and 176.4 kHz become 44.1 kHz, 96 and 192 kHz become 48 kHz. A rate from neither family goes to the cap. A mono or stereo source is never upmixed. A lossy source that would normally be copied into the output (an `.m4a` into `aac`) is transcoded instead when it exceeds a limit. ALAC and the other lossless outputs keep the source's rate and channels.
 
 Changing these settings does not rebuild files that already exist. They are re-encoded when their source changes, or on startup with `force_reencode: true`. To rebuild only the files above the limits, delete them and let the next periodic sync encode them again:
 

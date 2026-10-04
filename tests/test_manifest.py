@@ -103,5 +103,20 @@ def test_nested_paths_are_relative_to_the_output(tmp_path):
             "size": 0,
             "mtime": src.stat().st_mtime,
             "kind": "transcode",
+            "output_size": None,
+            "output_mtime": None,
         }
     }
+
+
+def test_output_matches_only_the_file_as_written(tmp_path):
+    root = str(tmp_path)
+    out = tmp_path / "x.mp3"
+    out.write_bytes(b"as written")
+    manifest.record(root, str(out), root, str(tmp_path / "x.ogg"), "transcode")
+    row = manifest.lookup(root, str(out))
+    assert manifest.output_matches(row, str(out))
+    out.write_bytes(b"edited by hand")
+    assert not manifest.output_matches(row, str(out))
+    out.unlink()
+    assert not manifest.output_matches(row, str(out))

@@ -2025,3 +2025,53 @@ class TestManifestProvenance:
             )
         )
         assert manifest.lookup(str(alac), str(alac / "X.m4a")) is None
+
+
+@pytest.mark.usefixtures("fresh_manifests")
+class TestLimitsAndProvenanceEdges:
+    """Follow-ups from review: over-limit lossy copies and stale manifest rows."""
+
+    @pytest.mark.parametrize(
+        "name,shape,expected",
+        [
+            ("X.m4a", (44100, 2), ("X.m4a", "copy")),
+            ("X.m4a", (96000, 2), ("X.m4a", "encode")),
+            ("X.m4a", (48000, 6), ("X.m4a", "encode")),
+            ("X.aac", (96000, 2), ("X.m4a", "encode")),
+        ],
+    )
+    def test_over_limit_aac_source_is_transcoded(self, name, shape, expected):
+        aac = OutputConfig(name="aac", codec="aac", path="/out")
+        with patch("audio_transcode_watcher.encoder._probe_shape", return_value=shape):
+            assert sync_mod.plan_output(f"/src/{name}", aac) == expected
+
+    def test_lossy_into_lossless_is_never_probed(self):
+        alac = OutputConfig(name="alac", codec="alac", path="/out")
+        with patch("audio_transcode_watcher.encoder._probe_shape") as probe:
+            assert sync_mod.plan_output("/src/X.m4a", alac) == ("X.m4a", "copy")
+        probe.assert_not_called()
+
+    @patch("audio_transcode_watcher.sync.safety_guard_active", return_value=False)
+    def test_edited_output_is_not_replaced(self, _guard, temp_dir):
+        source, mp3 = _dirs(temp_dir, "source", "mp3")
+        config = Config(
+            source_path=str(source),
+            outputs=[
+                OutputConfig(name="mp3", codec="mp3", path=str(mp3), bitrate="256k")
+            ],
+            fetch_lyrics=False,
+        )
+        (source / "X.ogg").write_bytes(b"ogg")
+        with patch(
+            "audio_transcode_watcher.sync.atomic_ffmpeg_encode",
+            side_effect=_fake_encode(b"from ogg"),
+        ):
+            process_source_file(str(source / "X.ogg"), config, check_stable=False)
+        (mp3 / "X.mp3").write_bytes(b"edited by hand, longer")
+        (source / "X.flac").write_bytes(b"flac")
+
+        with patch("audio_transcode_watcher.sync.atomic_ffmpeg_encode") as enc:
+            process_source_file(str(source / "X.flac"), config, check_stable=False)
+
+        enc.assert_not_called()
+        assert (mp3 / "X.mp3").read_bytes() == b"edited by hand, longer"

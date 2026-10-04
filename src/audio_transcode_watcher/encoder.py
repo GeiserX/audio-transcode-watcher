@@ -173,7 +173,8 @@ def target_sample_rate(source_rate: int, max_rate: int) -> int | None:
 
     Never upsamples. A rate above the cap drops to the highest rate of its
     own family that fits: 88.2 and 176.4 kHz go to 44.1 kHz, 96 and 192 kHz
-    to 48 kHz. A rate from neither family goes to the cap itself.
+    to 48 kHz. A rate from neither family, or a family with no rate under
+    the cap, goes to the cap itself.
     """
     if not max_rate or not source_rate or source_rate <= max_rate:
         return None
@@ -184,7 +185,7 @@ def target_sample_rate(source_rate: int, max_rate: int) -> int | None:
                 rate *= 2
             while rate > max_rate and rate % 2 == 0:
                 rate //= 2
-            return rate
+            return min(rate, max_rate)
     return max_rate
 
 

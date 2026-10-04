@@ -6,11 +6,11 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Added
 
-- Per-output `channels` and `max_sample_rate`. An `aac` output now defaults to `channels: 2` and `max_sample_rate: 48000`, so the AAC copies play everywhere a phone, AirPods or CarPlay can take them: anything with more than two channels is downmixed to stereo, 88.2 and 176.4 kHz sources become 44.1 kHz, and 96 and 192 kHz sources become 48 kHz. Nothing is ever upsampled or upmixed. Other codecs have no limit unless they set one, and `0` turns a limit off. ALAC is unchanged.
+- Per-output `channels` and `max_sample_rate`. An `aac` output now defaults to `channels: 2` and `max_sample_rate: 48000`, so the AAC copies play everywhere a phone, AirPods or CarPlay can take them: anything with more than two channels is downmixed to stereo, 88.2 and 176.4 kHz sources become 44.1 kHz, and 96 and 192 kHz sources become 48 kHz. Nothing is ever upsampled or upmixed. A lossy AAC source that exceeds the limits is transcoded rather than copied. Other codecs have no limit unless they set one, and `0` turns a limit off. ALAC is unchanged.
 
 ### Fixed
 
-- A lossless file that arrives after a lossy one of the same name now replaces the lossy file's transcode too, not only its copy. An Ogg transcoded into an MP3 output as `X.mp3` used to block the later `X.flac` from ever being encoded there. Each output folder now keeps `.atw-manifest.json`, recording which source made each file and how (encode, copy or transcode). A missing or unreadable manifest means "unknown", which behaves exactly as before, and the orphan pass drops rows whose file is gone.
+- A lossless file that arrives after a lossy one of the same name now replaces the lossy file's transcode too, not only its copy. An Ogg transcoded into an MP3 output as `X.mp3` used to block the later `X.flac` from ever being encoded there. Each output folder now keeps `.atw-manifest.json`, recording which source made each file and how (encode, copy or transcode). A row is trusted only while the output still has the size and modification time it was written with. A missing or unreadable manifest means "unknown", which behaves exactly as before, and the orphan pass drops rows whose file is gone.
 
 ### Upgrading
 

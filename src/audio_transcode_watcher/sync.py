@@ -13,7 +13,12 @@ from pathlib import Path
 
 from . import manifest
 from .config import Config, OutputConfig
-from .encoder import atomic_ffmpeg_encode, build_ffmpeg_command, copy_mp4_tags
+from .encoder import (
+    atomic_ffmpeg_encode,
+    build_ffmpeg_command,
+    copy_mp4_tags,
+    portable_limit_args,
+)
 from .lyrics import fetch_lyrics_for_file
 from .utils import (
     AUDIO_EXTENSIONS,
@@ -269,12 +274,16 @@ def plan_output(source_path: str, output: OutputConfig) -> tuple[str, str]:
     - a lossy source is copied unchanged (same extension) into a lossless
       output, since encoding it would only inflate it;
     - a lossy source is copied unchanged into a lossy output of the same
-      codec, and transcoded into a lossy output of another codec.
+      codec, unless it exceeds the output's channel or sample-rate limit,
+      and transcoded into a lossy output of another codec.
     """
-    if not is_lossless(source_path) and (
-        output.is_lossless or lossy_source_codec(source_path) == output.codec
-    ):
-        return nfc(os.path.basename(source_path)), "copy"
+    if not is_lossless(source_path):
+        if output.is_lossless:
+            return nfc(os.path.basename(source_path)), "copy"
+        if lossy_source_codec(source_path) == output.codec and not portable_limit_args(
+            source_path, output
+        ):
+            return nfc(os.path.basename(source_path)), "copy"
     return get_output_filename(source_path, output.extension), "encode"
 
 
@@ -302,7 +311,13 @@ def _made_from_lossy(output: OutputConfig, out_path: str) -> bool:
     Unknown (no manifest, no row) is False, which keeps today's behaviour.
     """
     row = manifest.lookup(output.path, out_path)
-    return bool(row) and row.get("kind") in ("copy", "transcode")
+    if not row or row.get("kind") not in ("copy", "transcode"):
+        return False
+    # Trust the row only while the file is still the one it describes.
+    if not manifest.output_matches(row, out_path):
+        logger.debug("Manifest row for %s is stale; leaving the file alone", out_path)
+        return False
+    return True
 
 
 def _process_outputs(source_path: str, config: Config, force: bool) -> bool:
