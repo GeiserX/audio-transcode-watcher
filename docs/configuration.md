@@ -82,7 +82,7 @@ Set it under `settings` for every output, or on one output to override, for exam
     corrupt_source: encode_anyway
 ```
 
-Either way the source is remembered as failed, so the strict attempt is not repeated on every scan. Replacing the file with a clean copy (a new modification time) clears that, and the next encode is strict again.
+Either way the source is remembered as failed, so the strict attempt is not repeated on every scan. Replacing the file with a clean copy (a new size or modification time) clears that, and the next scan rebuilds the tolerant copy with the strict encode.
 
 `whisper_fallback` and `whisper_model` were removed in 0.6.0 along with the Whisper lyrics fallback. A config that still sets them loads, and the first load logs one warning that they are ignored.
 
