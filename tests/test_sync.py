@@ -1,5 +1,6 @@
 """Tests for sync module."""
 
+import json
 import os
 from pathlib import Path
 from unittest.mock import patch
@@ -7,6 +8,7 @@ from unittest.mock import patch
 import pytest
 
 import audio_transcode_watcher.sync as sync_mod
+from audio_transcode_watcher import manifest
 from audio_transcode_watcher.config import Config, OutputConfig
 from audio_transcode_watcher.sync import (
     _cleanup_orphans,
@@ -1101,6 +1103,11 @@ class TestSyncSidecarsErrorHandling:
 LOSSY = [".mp3", ".aac", ".m4a", ".ogg", ".opus", ".wma"]
 
 
+def _visible(folder):
+    """Files in *folder*, without hidden ones such as the manifest."""
+    return [p for p in sorted(folder.iterdir()) if not p.name.startswith(".")]
+
+
 def _dirs(temp_dir, *names):
     paths = []
     for name in names:
@@ -1131,7 +1138,7 @@ class TestLossySources:
         process_source_file(str(src), config, check_stable=False)
 
         mock_encode.assert_not_called()
-        assert [p.name for p in out.iterdir()] == [f"Artist - Title{ext}"]
+        assert [p.name for p in _visible(out)] == [f"Artist - Title{ext}"]
         assert (out / f"Artist - Title{ext}").read_bytes() == src.read_bytes()
 
     @pytest.mark.parametrize(
@@ -1231,7 +1238,7 @@ class TestLossySources:
         process_source_file(str(ogg), config, check_stable=False)
 
         mock_encode.assert_not_called()
-        assert list(alac.iterdir()) == [] and list(mp3.iterdir()) == []
+        assert list(_visible(alac)) == [] and list(_visible(mp3)) == []
 
 
 class TestMixedExtensionOrphans:
@@ -1254,7 +1261,7 @@ class TestMixedExtensionOrphans:
 
         _cleanup_orphans(config)
 
-        assert sorted(p.name for p in alac.iterdir()) == sorted(keep)
+        assert sorted(p.name for p in _visible(alac)) == sorted(keep)
 
     def test_lossy_output_keeps_copies_and_transcodes(self, temp_dir):
         source, mp3 = _dirs(temp_dir, "source", "mp3")
@@ -1273,7 +1280,7 @@ class TestMixedExtensionOrphans:
 
         _cleanup_orphans(config)
 
-        assert sorted(p.name for p in mp3.iterdir()) == sorted(keep)
+        assert sorted(p.name for p in _visible(mp3)) == sorted(keep)
 
     @patch("audio_transcode_watcher.sync.safety_guard_active", return_value=False)
     def test_deleting_lossy_source_keeps_lossless_output_and_lrc(
@@ -1293,7 +1300,7 @@ class TestMixedExtensionOrphans:
         # Song.mp3 was in the source and has just been deleted.
         delete_outputs(str(source / "Song.mp3"), config)
 
-        assert sorted(p.name for p in alac.iterdir()) == ["Song.lrc", "Song.m4a"]
+        assert sorted(p.name for p in _visible(alac)) == ["Song.lrc", "Song.m4a"]
 
     @patch("audio_transcode_watcher.sync.safety_guard_active", return_value=False)
     def test_deleting_last_source_of_stem_removes_lrc(self, _guard, temp_dir):
@@ -1307,7 +1314,7 @@ class TestMixedExtensionOrphans:
 
         delete_outputs(str(source / "Song.ogg"), config)
 
-        assert list(alac.iterdir()) == []
+        assert list(_visible(alac)) == []
 
 
 class TestOrphanRaceGuards:
@@ -1542,7 +1549,7 @@ class TestRealCorruptSource:
 
         process_source_file(str(bad), config, check_stable=False)
 
-        assert list(out.iterdir()) == []
+        assert list(_visible(out)) == []
         assert str(bad) in sync_mod._failed_sources
 
     def test_one_flipped_bit_is_caught(self, temp_dir):
@@ -1580,7 +1587,7 @@ class TestRealCorruptSource:
 
         process_source_file(str(bad), config, check_stable=False)
 
-        assert list(out.iterdir()) == []
+        assert list(_visible(out)) == []
 
 
 class TestLosslessWinsAtProcessTime:
@@ -1638,7 +1645,7 @@ class TestLosslessWinsAtProcessTime:
         ):
             process_source_file(str(source / "X.flac"), config, check_stable=False)
 
-        assert sorted(p.name for p in alac.iterdir()) == ["X.m4a"]
+        assert sorted(p.name for p in _visible(alac)) == ["X.m4a"]
 
     @patch("audio_transcode_watcher.sync.atomic_ffmpeg_encode")
     @patch("audio_transcode_watcher.sync.safety_guard_active", return_value=False)
@@ -1714,7 +1721,7 @@ class TestErrorPaths:
         ):
             process_source_file(str(mp3), config, check_stable=False)
 
-        assert list(out.iterdir()) == []
+        assert list(_visible(out)) == []
         assert "Copy failed" in caplog.text
 
     @patch("audio_transcode_watcher.sync.atomic_ffmpeg_encode")
@@ -1841,3 +1848,180 @@ class TestErrorPaths:
         with patch("audio_transcode_watcher.sync.os.walk", side_effect=walk):
             _cleanup_orphans(self._config(source, out))
         assert "Failed to scan" in caplog.text and "for orphans" in caplog.text
+
+
+@pytest.fixture
+def fresh_manifests():
+    """Start and end with no cached manifest rows."""
+    manifest._rows.clear()
+    manifest._dirty.clear()
+    manifest._last_write.clear()
+    yield
+    manifest._rows.clear()
+    manifest._dirty.clear()
+    manifest._last_write.clear()
+
+
+def _fake_encode(content):
+    def encode(cmd, dest, **_kwargs):
+        Path(dest).parent.mkdir(parents=True, exist_ok=True)
+        Path(dest).write_bytes(content)
+        return 0
+
+    return encode
+
+
+@pytest.mark.usefixtures("fresh_manifests")
+class TestManifestProvenance:
+    """An output made from a lossy source is replaced when the lossless one arrives."""
+
+    def _setup(self, temp_dir):
+        source, mp3 = _dirs(temp_dir, "source", "mp3")
+        config = Config(
+            source_path=str(source),
+            outputs=[
+                OutputConfig(name="mp3", codec="mp3", path=str(mp3), bitrate="256k")
+            ],
+            fetch_lyrics=False,
+        )
+        return source, mp3, config
+
+    def _ogg_then_flac(self, source, mp3, config, between=None):
+        ogg = source / "X.ogg"
+        ogg.write_bytes(b"ogg")
+        with patch(
+            "audio_transcode_watcher.sync.atomic_ffmpeg_encode",
+            side_effect=_fake_encode(b"from ogg"),
+        ):
+            process_source_file(str(ogg), config, check_stable=False)
+        manifest.flush_all(force=True)
+        assert (mp3 / "X.mp3").read_bytes() == b"from ogg"
+        if between:
+            between()
+        flac = source / "X.flac"
+        flac.write_bytes(b"flac")
+        with patch(
+            "audio_transcode_watcher.sync.atomic_ffmpeg_encode",
+            side_effect=_fake_encode(b"from flac"),
+        ) as enc:
+            process_source_file(str(flac), config, force=False, check_stable=False)
+        return enc
+
+    @patch("audio_transcode_watcher.sync.safety_guard_active", return_value=False)
+    def test_ogg_transcode_then_flac_reencodes(self, _guard, temp_dir):
+        source, mp3, config = self._setup(temp_dir)
+
+        def restart():  # rows must come back from disk, not memory
+            manifest._rows.clear()
+
+        enc = self._ogg_then_flac(source, mp3, config, between=restart)
+
+        enc.assert_called_once()
+        assert (mp3 / "X.mp3").read_bytes() == b"from flac"
+        manifest.flush_all(force=True)
+        rows = json.loads((mp3 / ".atw-manifest.json").read_text())
+        assert rows["X.mp3"]["kind"] == "encode"
+        assert rows["X.mp3"]["source"] == "X.flac"
+        assert rows["X.mp3"]["size"] == 4
+
+    @patch("audio_transcode_watcher.sync.safety_guard_active", return_value=False)
+    def test_missing_manifest_behaves_as_before(self, _guard, temp_dir):
+        source, mp3, config = self._setup(temp_dir)
+
+        def lose_manifest():
+            (mp3 / ".atw-manifest.json").unlink()
+            manifest._rows.clear()
+
+        enc = self._ogg_then_flac(source, mp3, config, between=lose_manifest)
+
+        enc.assert_not_called()
+        assert (mp3 / "X.mp3").read_bytes() == b"from ogg"
+
+    @patch("audio_transcode_watcher.sync.safety_guard_active", return_value=False)
+    def test_unreadable_manifest_behaves_as_before(self, _guard, temp_dir, caplog):
+        source, mp3, config = self._setup(temp_dir)
+
+        def corrupt():
+            (mp3 / ".atw-manifest.json").write_text("{not json")
+            manifest._rows.clear()
+
+        enc = self._ogg_then_flac(source, mp3, config, between=corrupt)
+
+        enc.assert_not_called()
+        assert "Ignoring unreadable manifest" in caplog.text
+
+    @patch("audio_transcode_watcher.sync.atomic_ffmpeg_encode")
+    @patch("audio_transcode_watcher.sync.safety_guard_active", return_value=False)
+    def test_encode_from_lossless_is_kept(self, _guard, mock_encode, temp_dir):
+        source, mp3, config = self._setup(temp_dir)
+        flac = source / "X.flac"
+        flac.write_bytes(b"flac")
+        (mp3 / "X.mp3").write_bytes(b"from flac")
+        manifest.record(str(mp3), str(mp3 / "X.mp3"), str(source), str(flac), "encode")
+
+        process_source_file(str(flac), config, check_stable=False)
+
+        mock_encode.assert_not_called()
+
+    @patch("audio_transcode_watcher.sync.safety_guard_active", return_value=False)
+    def test_copy_is_recorded(self, _guard, temp_dir):
+        source, alac = _dirs(temp_dir, "source", "alac")
+        mp3 = source / "Song.mp3"
+        mp3.write_bytes(b"mp3")
+        config = Config(
+            source_path=str(source),
+            outputs=[OutputConfig(name="alac", codec="alac", path=str(alac))],
+            fetch_lyrics=False,
+        )
+        process_source_file(str(mp3), config, check_stable=False)
+        assert manifest.lookup(str(alac), str(alac / "Song.mp3"))["kind"] == "copy"
+
+    def test_orphan_pass_drops_rows_whose_output_is_gone(self, temp_dir):
+        source, alac = _dirs(temp_dir, "source", "alac")
+        (source / "Keep.flac").touch()
+        (alac / "Keep.m4a").touch()
+        rows = {
+            "Keep.m4a": {
+                "source": "Keep.flac",
+                "size": 0,
+                "mtime": 0,
+                "kind": "encode",
+            },
+            "Gone.m4a": {
+                "source": "Gone.flac",
+                "size": 0,
+                "mtime": 0,
+                "kind": "encode",
+            },
+        }
+        (alac / ".atw-manifest.json").write_text(json.dumps(rows))
+        config = Config(
+            source_path=str(source),
+            outputs=[OutputConfig(name="alac", codec="alac", path=str(alac))],
+        )
+
+        _cleanup_orphans(config)
+
+        assert (alac / ".atw-manifest.json").exists()  # never treated as an orphan
+        assert set(json.loads((alac / ".atw-manifest.json").read_text())) == {
+            "Keep.m4a"
+        }
+
+    @patch("audio_transcode_watcher.sync.safety_guard_active", return_value=False)
+    def test_purge_forgets_cached_rows(self, _guard, temp_dir):
+        source, alac = _dirs(temp_dir, "source", "alac")
+        (source / "X.flac").touch()
+        manifest.record(
+            str(alac),
+            str(alac / "X.m4a"),
+            str(source),
+            str(source / "X.flac"),
+            "transcode",
+        )
+        purge_all_outputs(
+            Config(
+                source_path=str(source),
+                outputs=[OutputConfig(name="alac", codec="alac", path=str(alac))],
+            )
+        )
+        assert manifest.lookup(str(alac), str(alac / "X.m4a")) is None

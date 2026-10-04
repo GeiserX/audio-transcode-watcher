@@ -11,6 +11,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
+from . import manifest
 from .config import Config, OutputConfig
 from .encoder import atomic_ffmpeg_encode, build_ffmpeg_command, copy_mp4_tags
 from .lyrics import fetch_lyrics_for_file
@@ -159,6 +160,7 @@ def process_source_file(
     finally:
         with _in_progress_lock:
             _in_progress.discard(source_path)
+        manifest.flush_all()
 
 
 def _is_known_failure(source_path: str) -> bool:
@@ -294,6 +296,15 @@ def _atomic_copy(source_path: str, out_path: str) -> bool:
         return False
 
 
+def _made_from_lossy(output: OutputConfig, out_path: str) -> bool:
+    """True if the manifest says *out_path* came from a lossy source.
+
+    Unknown (no manifest, no row) is False, which keeps today's behaviour.
+    """
+    row = manifest.lookup(output.path, out_path)
+    return bool(row) and row.get("kind") in ("copy", "transcode")
+
+
 def _process_outputs(source_path: str, config: Config, force: bool) -> bool:
     """
     Process all outputs for a source file.
@@ -321,11 +332,20 @@ def _process_outputs(source_path: str, config: Config, force: bool) -> bool:
         if siblings:
             _remove_lossy_copies(source_path, siblings, output, config)
         if not force and os.path.exists(out_path):
-            continue
+            if not (is_lossless(source_path) and _made_from_lossy(output, out_path)):
+                continue
+            logger.info(
+                "Replacing %s: it was made from a lossy source, %s wins",
+                out_path,
+                source_path,
+            )
 
         os.makedirs(os.path.dirname(out_path), exist_ok=True)
         if action == "copy":
-            _atomic_copy(source_path, out_path)
+            if _atomic_copy(source_path, out_path):
+                manifest.record(
+                    output.path, out_path, config.source_path, source_path, "copy"
+                )
             continue
 
         finalize = None
@@ -336,7 +356,12 @@ def _process_outputs(source_path: str, config: Config, force: bool) -> bool:
 
         cmd = build_ffmpeg_command(source_path, out_path, output)
         rc = atomic_ffmpeg_encode(cmd, out_path, finalize=finalize)
-        if rc != 0:
+        if rc == 0:
+            kind = "encode" if is_lossless(source_path) else "transcode"
+            manifest.record(
+                output.path, out_path, config.source_path, source_path, kind
+            )
+        else:
             logger.error(
                 "%s encode failed for %s",
                 output.name.upper(),
@@ -510,6 +535,7 @@ def purge_all_outputs(config: Config) -> None:
                         os.remove(full)
                     except Exception as e:
                         logger.error("Failed to purge %s: %s", full, e)
+            manifest.forget(output.path)
             remove_empty_dirs(output.path)
         except Exception as e:
             logger.error("Failed to purge folder %s: %s", output.path, e)
@@ -582,6 +608,7 @@ def initial_sync(config: Config, periodic: bool = False) -> None:
         )
     else:
         _cleanup_orphans(config)
+    manifest.flush_all(force=True)
     logger.info("%s complete.", label)
 
 
@@ -677,6 +704,9 @@ def _cleanup_orphans(config: Config) -> None:
         except Exception as e:
             logger.error("Failed to scan %s for orphans: %s", output.path, e)
 
-    # Remove empty subdirectories left after orphan cleanup
+    # Remove empty subdirectories left after orphan cleanup, and forget
+    # manifest rows whose output is gone
     for output in config.outputs:
         remove_empty_dirs(output.path)
+        manifest.prune(output.path)
+        manifest.flush(output.path, force=True)

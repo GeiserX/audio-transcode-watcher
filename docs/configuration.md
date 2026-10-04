@@ -75,7 +75,7 @@ A lossless source is encoded to every output.
 
 A lossy source is never encoded into a lossless output, because that only makes a big file that looks lossless. It is copied there unchanged, with its own extension, so an ALAC folder can hold `.m4a` encodes next to `.mp3` or `.ogg` copies. Into a lossy output it is copied unchanged when it already has that output's codec (`.mp3` into `mp3`, `.m4a` or `.aac` into `aac`, `.opus` into `opus`) and transcoded otherwise. Copies keep their tags and cover as they are.
 
-When a lossless and a lossy file share a name in the source folder, the lossless one is used for every output. If the lossy file came first and was already copied, the copy is removed and the lossless file is encoded as soon as it is processed.
+When a lossless and a lossy file share a name in the source folder, the lossless one is used for every output. If the lossy file came first and was already copied or transcoded, that file is replaced by an encode of the lossless one as soon as it is processed. To tell those files apart, each output folder keeps a hidden `.atw-manifest.json` recording which source made each file and whether it was an encode, a copy or a transcode. Deleting it is safe: files it does not know about are treated as they were before 0.6.1.
 
 ## Portable limits (channels and sample rate)
 
