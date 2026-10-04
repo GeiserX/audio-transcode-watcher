@@ -1,6 +1,6 @@
 # Roadmap
 
-Current version: **0.5.0**
+Current version: **0.6.0**
 
 ## Completed
 
@@ -9,10 +9,11 @@ Current version: **0.5.0**
 - **Stale temp file cleanup** on startup (v0.1.2)
 - **Synced lyrics sidecar** (.lrc) copying to outputs (v0.2.0)
 - **Auto-fetch synced lyrics** via syncedlyrics providers (v0.3.0)
-- **Whisper local transcription fallback** for lyrics (v0.4.0)
+- **Whisper local transcription fallback** for lyrics (v0.4.0, removed in v0.6.0)
 - **Recursive directory support** -- mirror source folder hierarchy in outputs (v0.5.0)
+- **Lossy sources copied, not inflated**, corrupt sources fail loudly, ReplayGain and MusicBrainz tags kept in M4A outputs, configurable periodic sync (v0.6.0)
 
-## v0.6.0 -- Quality of Life
+## v0.7.0 -- Quality of Life
 
 - [ ] **Progress reporting during initial sync**
   - Show file count progress (e.g. 42/500)
@@ -26,7 +27,7 @@ Current version: **0.5.0**
   - Preview what would be encoded without doing it
   - Useful for testing configuration changes
 
-## v0.7.0 -- Observability
+## v0.8.0 -- Observability
 
 - [ ] **Health check endpoint**
   - HTTP endpoint for container health monitoring
@@ -36,7 +37,7 @@ Current version: **0.5.0**
   - Webhook/Shoutrrr support for encoding events
   - Error alerts for failed encodes
 
-## v0.8.0 -- Smart Encoding
+## v0.9.0 -- Smart Encoding
 
 - [ ] **FFmpeg multi-output (tee muxer)**
   - Single decode pass, multiple encodes

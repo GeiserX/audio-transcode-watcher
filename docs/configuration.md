@@ -58,12 +58,28 @@ settings:
   # Auto-fetch synced .lrc lyrics (default: true)
   fetch_lyrics: true
 
-  # Use Whisper local transcription as fallback when no lyrics found online (default: true)
-  whisper_fallback: true
-
-  # Whisper model size: tiny, base, small, medium, large (default: base)
-  whisper_model: base
+  # Seconds between periodic full syncs (default: 300)
+  sync_interval_seconds: 300
 ```
+
+`whisper_fallback` and `whisper_model` were removed in 0.6.0 along with the Whisper lyrics fallback. A config that still sets them loads, and the first load logs one warning that they are ignored.
+
+## Source formats
+
+| Kind     | Extensions                                                         |
+|----------|--------------------------------------------------------------------|
+| Lossless | `.flac` `.alac` `.wav` `.aiff` `.aif` `.ape` `.wv` `.tta` `.tak`   |
+| Lossy    | `.mp3` `.aac` `.m4a` `.ogg` `.opus` `.wma`                         |
+
+A lossless source is encoded to every output.
+
+A lossy source is never encoded into a lossless output, because that only makes a big file that looks lossless. It is copied there unchanged, with its own extension, so an ALAC folder can hold `.m4a` encodes next to `.mp3` or `.ogg` copies. Into a lossy output it is copied unchanged when it already has that output's codec (`.mp3` into `mp3`, `.m4a` or `.aac` into `aac`, `.opus` into `opus`) and transcoded otherwise. Copies keep their tags and cover as they are.
+
+When a lossless and a lossy file share a name in the source folder, the lossless one is used for every output.
+
+## Tags in ALAC and AAC outputs
+
+FFmpeg writes the standard MP4 atoms (title, artist, album and so on). After an ALAC or AAC encode, the tags those atoms cannot hold are copied from the source as iTunes freeform atoms named `----:com.apple.iTunes:<NAME>`: `REPLAYGAIN_TRACK_GAIN`, `REPLAYGAIN_TRACK_PEAK`, `REPLAYGAIN_ALBUM_GAIN`, `REPLAYGAIN_ALBUM_PEAK`, `MUSICBRAINZ_TRACKID`, `MUSICBRAINZ_ALBUMID`, `MUSICBRAINZ_ARTISTID`, `MUSICBRAINZ_ALBUMARTISTID`, `MUSICBRAINZ_RELEASEGROUPID`, `ISRC`, `LABEL`, `CATALOGNUMBER`, `ARTISTSORT`, `ALBUMARTISTSORT` and `ALBUMSORT`.
 
 ## Supported Codecs
 

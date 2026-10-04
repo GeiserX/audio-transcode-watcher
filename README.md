@@ -20,7 +20,10 @@ Keep one library in several formats: lossless for the archive, lossy for phones 
 - Watches the source folder and reacts to new, changed, renamed and deleted files.
 - Writes any number of outputs in one pass, in ALAC, AAC, MP3, Opus, FLAC or WAV at the bitrate you pick.
 - Mirrors the Artist/Album folder tree in every output.
-- Fetches synced `.lrc` lyrics, with Whisper speech-to-text when none are found online.
+- Copies lossy sources (MP3, M4A, Ogg, Opus, WMA) unchanged instead of inflating them into a lossless output.
+- Fails loudly on a source that does not decode cleanly, and writes no output for it.
+- Keeps ReplayGain, MusicBrainz ids, ISRC, label and sort tags in ALAC and AAC copies.
+- Fetches synced `.lrc` lyrics, and writes nothing when no real lyrics are found.
 - Embeds cover art if you want it.
 - Writes atomically and removes orphaned outputs, but never deletes anything when a folder looks empty.
 - Handles Unicode file names.
@@ -32,7 +35,7 @@ Keep one library in several formats: lossless for the archive, lossy for phones 
 curl -fsSL -o config.yaml https://raw.githubusercontent.com/GeiserX/audio-transcode-watcher/main/config.example.yaml
 docker run -d --name audio_transcoder -e CONFIG_FILE=/app/config.yaml \
   -v ./config.yaml:/app/config.yaml:ro -v /path/to/flac:/music/flac:ro -v /path/to/mp3:/music/mp3 \
-  drumsergio/audio-transcoder:0.5.2
+  drumsergio/audio-transcoder:0.6.0
 ```
 
 Edit `config.yaml` first so its outputs match the folders you mount; the example writes ALAC, MP3 and AAC. [Getting started](https://github.com/GeiserX/audio-transcode-watcher/blob/main/docs/getting-started.md) has Docker Compose and the full `docker run`.
@@ -45,6 +48,7 @@ Edit `config.yaml` first so its outputs match the folders you mount; the example
 - [How it works](https://github.com/GeiserX/audio-transcode-watcher/blob/main/docs/how-it-works.md): sync and watch mode, folder mirroring, safety guards, performance
 - [Development](https://github.com/GeiserX/audio-transcode-watcher/blob/main/docs/development.md): tests, building the image, contributing
 - [Roadmap](https://github.com/GeiserX/audio-transcode-watcher/blob/main/docs/ROADMAP.md)
+- [Changelog](https://github.com/GeiserX/audio-transcode-watcher/blob/main/CHANGELOG.md)
 
 ## Related projects
 
