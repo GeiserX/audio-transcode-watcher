@@ -10,8 +10,8 @@ from unittest.mock import patch
 
 import mutagen
 import pytest
-from mutagen.id3 import ID3
-from mutagen.mp4 import MP4
+from mutagen.id3 import ID3, TXXX
+from mutagen.mp4 import MP4, MP4FreeForm
 
 import audio_transcode_watcher.sync as sync_mod
 from audio_transcode_watcher import manifest, replaygain
@@ -325,3 +325,187 @@ class TestNoReprocessing:
         assert abs(_gain(flac) - EXPECTED_GAIN) < 0.5
         output = config.outputs[0]
         assert sync_mod._tolerant_source_changed(output, str(out), str(flac))
+
+
+@needs_ffmpeg
+class TestFormats:
+    def test_wavpack_source_gets_apev2_tags(self, tmp_path):
+        wv = _tone(tmp_path / "a.wv", "-c:a", "wavpack")
+        assert replaygain.tag_source(str(wv)) is not None
+        assert abs(_gain(wv) - EXPECTED_GAIN) < 0.5
+        assert "REPLAYGAIN_TRACK_GAIN" in mutagen.File(wv).tags
+
+    def test_m4a_source_gets_lowercase_freeform_atoms(self, tmp_path):
+        m4a = _tone(tmp_path / "a.m4a", "-c:a", "aac")
+        audio = MP4(m4a)
+        audio["----:com.apple.iTunes:REPLAYGAIN_TRACK_PEAK"] = [MP4FreeForm(b"0.5")]
+        audio.save()
+        assert replaygain.tag_source(str(m4a)) is not None
+        keys = [k for k in MP4(m4a).tags if "replaygain" in k.lower()]
+        assert sorted(keys) == [
+            "----:com.apple.iTunes:replaygain_track_gain",
+            "----:com.apple.iTunes:replaygain_track_peak",
+        ]
+        assert abs(_gain(m4a) - EXPECTED_GAIN) < 0.5
+        # The AAC encoder overshoots at the tone's abrupt start, so the true
+        # peak is real but higher than the sine's; it only has to be fresh.
+        assert _peak(m4a) != 0.5
+
+    def test_id3_case_variant_is_replaced_not_duplicated(self, tmp_path):
+        mp3 = _tone(tmp_path / "a.mp3", "-c:a", "libmp3lame")
+        tags = ID3(mp3)
+        tags.add(TXXX(encoding=0, desc="replaygain_track_peak", text=["0.5"]))
+        tags.save()
+        assert replaygain.tag_source(str(mp3)) is not None
+        descs = [f.desc for f in ID3(mp3).getall("TXXX")]
+        assert sorted(d for d in descs if "eplay" in d.lower()) == [
+            "REPLAYGAIN_TRACK_GAIN",
+            "REPLAYGAIN_TRACK_PEAK",
+        ]
+
+    @pytest.mark.parametrize(
+        ("name", "args"),
+        [("a.aac", ("-c:a", "aac", "-f", "adts")), ("a.wma", ("-c:a", "wmav2"))],
+    )
+    def test_formats_without_supported_tags_are_not_measured(
+        self, tmp_path, name, args
+    ):
+        path = _tone(tmp_path / name, *args)
+        with patch.object(replaygain, "measure") as measure:
+            assert replaygain.tag_source(str(path)) is None
+        measure.assert_not_called()
+        assert replaygain.write_track_tags(str(path), {"X": "1"}) is False
+
+    def test_silent_source_gets_no_tag(self, tmp_path, caplog):
+        silent = tmp_path / "s.flac"
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "anullsrc=r=44100:cl=mono",
+                "-t",
+                "2",
+                str(silent),
+            ],
+            check=True,
+        )
+        with caplog.at_level("INFO"):
+            assert replaygain.tag_source(str(silent)) is None
+        assert "silent" in caplog.text
+        assert replaygain.read_track_tags(str(silent)) == {}
+
+
+class TestErrors:
+    def test_measure_timeout(self, caplog):
+        boom = subprocess.TimeoutExpired("ffmpeg", 1)
+        with patch.object(replaygain.subprocess, "run", side_effect=boom):
+            assert replaygain.measure("/x.flac") is None
+        assert "timed out" in caplog.text
+
+    def test_measure_without_ffmpeg(self, caplog):
+        with patch.object(replaygain.subprocess, "run", side_effect=OSError("no")):
+            assert replaygain.measure("/x.flac") is None
+        assert "could not run ffmpeg" in caplog.text
+
+    @pytest.mark.parametrize(
+        ("rc", "stderr"),
+        [(1, b"broken\n"), (0, b"no summary here"), (0, b"Summary:\n nothing")],
+    )
+    def test_measure_unparseable_output(self, rc, stderr):
+        done = SimpleNamespace(returncode=rc, stderr=stderr)
+        with patch.object(replaygain.subprocess, "run", return_value=done):
+            assert replaygain.measure("/x.flac") is None
+
+    def test_unknown_format_is_skipped(self, tmp_path):
+        junk = tmp_path / "a.dat"
+        junk.write_bytes(b"not audio at all")
+        assert replaygain.tag_source(str(junk)) is None
+        assert replaygain.write_track_tags(str(junk), {"X": "1"}) is False
+
+    def test_corrupt_header_is_skipped(self, tmp_path, caplog):
+        junk = tmp_path / "a.tta"
+        junk.write_bytes(b"not audio at all")
+        assert replaygain.tag_source(str(junk)) is None
+        assert "cannot read tags" in caplog.text
+
+    def test_unreadable_file_is_skipped(self, tmp_path, caplog):
+        with patch.object(replaygain.mutagen, "File", side_effect=OSError("io")):
+            assert replaygain.tag_source(str(tmp_path / "a.flac")) is None
+        assert "cannot read tags" in caplog.text
+
+    @needs_ffmpeg
+    def test_failed_write_is_logged(self, tmp_path, caplog):
+        flac = _tone(tmp_path / "a.flac")
+        with patch.object(replaygain, "_write", side_effect=OSError("disk full")):
+            assert replaygain.tag_source(str(flac)) is None
+        assert "could not tag" in caplog.text
+        assert str(flac) not in replaygain._own_writes
+
+    def test_own_write_pending_and_stale(self, tmp_path):
+        f = tmp_path / "a.flac"
+        f.write_bytes(b"x")
+        key = str(f)
+        replaygain._own_writes[key] = None
+        assert replaygain.is_own_write(key)
+        replaygain._own_writes[key] = (999, 1)
+        assert not replaygain.is_own_write(key)
+        assert key not in replaygain._own_writes
+        assert not replaygain.is_own_write(key)
+
+    def test_checked_cache(self, tmp_path):
+        f = tmp_path / "a.flac"
+        f.write_bytes(b"x")
+        replaygain.mark_checked(str(f))
+        assert replaygain.is_checked(str(f))
+        f.write_bytes(b"xy")
+        assert not replaygain.is_checked(str(f))
+        replaygain.forget(str(f))
+        f.unlink()
+        replaygain.mark_checked(str(f))
+        assert str(f) not in replaygain._checked
+
+
+@needs_ffmpeg
+class TestCarryEdges:
+    def test_lossy_source_with_lossless_sibling_leaves_outputs_alone(self, tmp_path):
+        src = tmp_path / "src"
+        _tone(src / "a.flac")
+        _tone(src / "a.mp3", "-c:a", "libmp3lame")
+        config = _config(src, {"mp3": ""}, tmp_path, rg=False)
+        initial_sync(config)
+        out = tmp_path / "mp3" / "a.mp3"
+        before = out.read_bytes()
+        config.replaygain = True
+        process_source_file(str(src / "a.mp3"), config, check_stable=False)
+        assert abs(_gain(src / "a.mp3") - EXPECTED_GAIN) < 0.5
+        assert out.read_bytes() == before  # the FLAC's encode, untouched
+
+    def test_one_bad_output_does_not_stop_the_others(self, tmp_path, caplog):
+        src = tmp_path / "src"
+        _tone(src / "a.flac")
+        config = _config(src, {"alac": "", "mp3": ""}, tmp_path, rg=False)
+        initial_sync(config)
+        config.replaygain = True
+        real = replaygain.write_track_tags
+
+        def flaky(path, values):
+            if path.endswith(".m4a"):
+                raise OSError("read-only")
+            return real(path, values)
+
+        with patch.object(replaygain, "write_track_tags", side_effect=flaky):
+            initial_sync(config)
+        assert "could not tag" in caplog.text
+        assert abs(_gain(tmp_path / "mp3" / "a.mp3") - EXPECTED_GAIN) < 0.5
+
+    def test_unreadable_source_tags_carry_nothing(self, tmp_path):
+        src = tmp_path / "src"
+        _tone(src / "a.flac")
+        config = _config(src, {"mp3": ""}, tmp_path)
+        with patch.object(replaygain, "read_track_tags", side_effect=OSError("io")):
+            sync_mod._carry_replaygain(str(src / "a.flac"), config)
