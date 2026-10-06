@@ -44,6 +44,9 @@ outputs:
     bitrate: 128k
     path: /music/opus
 
+# Even volume: write ReplayGain 2.0 track tags (default: false)
+replaygain: false
+
 # Optional settings
 settings:
   # Delete all outputs and re-encode on startup
@@ -83,6 +86,31 @@ Set it under `settings` for every output, or on one output to override, for exam
 ```
 
 Either way the source is remembered as failed, so the strict attempt is not repeated on every scan. Replacing the file with a clean copy (a new size or modification time) clears that, and the next scan rebuilds the tolerant copy with the strict encode.
+
+### ReplayGain
+
+With `replaygain: true` at the top level of the config, every track plays at the same loudness in any player that reads ReplayGain tags, such as Navidrome and foobar2000:
+
+```yaml
+replaygain: true
+```
+
+For each source that has no `REPLAYGAIN_TRACK_GAIN` tag yet, the watcher measures its loudness with FFmpeg's EBU R128 filter and writes two tags into the source file:
+
+- `REPLAYGAIN_TRACK_GAIN`: -18 LUFS minus the measured integrated loudness, for example `-6.32 dB`.
+- `REPLAYGAIN_TRACK_PEAK`: the true peak as a linear value, for example `0.988553`.
+
+They are written in the file's own tag format: Vorbis comments in FLAC, Ogg and Opus, `TXXX` frames in MP3, WAV and AIFF, freeform atoms in M4A, and APEv2 in APE, WavPack and TAK. An ID3v2.3 file stays at 2.3. The M4A atoms use the names Picard writes, such as `----:com.apple.iTunes:replaygain_track_gain`. Raw `.aac` and `.wma` sources are left alone. A source that already has a track gain from any tool is never measured again, and a silent file gets no tag.
+
+Every output gets the same two tags. New encodes carry them from the source. The watcher writes them into outputs that already exist without re-encoding them, and copies lossy sources again so each copy stays identical to its source.
+
+This applies to the whole library on the first sync after you turn it on, and then to every file that arrives. The first pass decodes each untagged source once, through the same `parallel_workers` as encoding, so a large library takes a while. The watcher logs and skips a file it cannot measure, and tries it again after the next restart.
+
+The watcher writes no album gain. Album gain needs to know which files form an album, and a folder does not say that reliably. Many libraries are one flat folder.
+
+Writing the tags changes the source file's size and modification time. The watcher recognises its own writes, so a tagged source is not treated as a new version and nothing is re-encoded. Other tools that watch the source folder, like a media server's library scan or a sync job, see the change once.
+
+`replaygain` is also accepted under `settings`.
 
 `whisper_fallback` and `whisper_model` were removed in 0.6.0 along with the Whisper lyrics fallback. A config that still sets them loads, and the first load logs one warning that they are ignored.
 
