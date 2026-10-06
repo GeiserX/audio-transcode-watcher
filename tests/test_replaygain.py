@@ -234,6 +234,8 @@ class TestOutputs:
         initial_sync(config)
         assert abs(_gain(mp3) - EXPECTED_GAIN) < 0.5
         assert filecmp.cmp(mp3, copy, shallow=False)
+        # A real copy (shutil.copy2) carries the source's mtime.
+        assert copy.stat().st_mtime == mp3.stat().st_mtime
 
 
 @needs_ffmpeg
@@ -298,8 +300,14 @@ class TestNoReprocessing:
         manifest.lookup(str(tmp_path / "mp3"), str(out))["kind"] = "tolerant"
 
         config.replaygain = True
-        initial_sync(config)
+        for _scan in range(2):  # the scan that tags, then the next one
+            with patch.object(sync_mod, "atomic_ffmpeg_encode") as encode:
+                initial_sync(config)
+            encode.assert_not_called()
         assert abs(_gain(flac) - EXPECTED_GAIN) < 0.5
+        assert abs(_gain(out) - EXPECTED_GAIN) < 0.5
+        row = manifest.lookup(str(tmp_path / "mp3"), str(out))
+        assert row["kind"] == "tolerant"
         output = config.outputs[0]
         assert not sync_mod._tolerant_source_changed(output, str(out), str(flac))
 
