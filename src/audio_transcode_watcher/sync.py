@@ -183,7 +183,11 @@ def _tag_source(source_path: str, config: Config) -> None:
     described the source as it was are updated to match, so the edit is
     not mistaken for a new source (a tolerant copy would be rebuilt).
     """
-    edited = replaygain.tag_source(source_path)
+    try:
+        edited = replaygain.tag_source(source_path)
+    except Exception as e:  # noqa: BLE001 - tagging never blocks the encode
+        logger.warning("ReplayGain: could not tag %s: %s", source_path, e)
+        return
     if edited is None:
         return
     before, _after = edited

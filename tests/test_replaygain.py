@@ -503,6 +503,16 @@ class TestCarryEdges:
         assert "could not tag" in caplog.text
         assert abs(_gain(tmp_path / "mp3" / "a.mp3") - EXPECTED_GAIN) < 0.5
 
+    def test_tagging_error_never_blocks_the_encode(self, tmp_path, caplog):
+        src = tmp_path / "src"
+        _tone(src / "a.flac")
+        config = _config(src, {"mp3": ""}, tmp_path)
+        boom = RuntimeError("odd tags")
+        with patch.object(replaygain, "tag_source", side_effect=boom):
+            process_source_file(str(src / "a.flac"), config, check_stable=False)
+        assert (tmp_path / "mp3" / "a.mp3").exists()
+        assert "could not tag" in caplog.text
+
     def test_unreadable_source_tags_carry_nothing(self, tmp_path):
         src = tmp_path / "src"
         _tone(src / "a.flac")
