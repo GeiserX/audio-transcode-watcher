@@ -11,7 +11,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-from . import manifest
+from . import manifest, replaygain
 from .config import Config, OutputConfig
 from .encoder import (
     DECODE_ERROR_RC,
@@ -155,8 +155,14 @@ def process_source_file(
         _in_progress.add(source_path)
 
     try:
+        # Tag the source first, so new encodes and copies carry the tags.
+        if config.replaygain and not replaygain.is_checked(source_path):
+            _tag_source(source_path, config)
         if not _process_outputs(source_path, config, force):
             _remember_failure(source_path)
+        if config.replaygain and not replaygain.is_checked(source_path):
+            _carry_replaygain(source_path, config)
+            replaygain.mark_checked(source_path)
         # Auto-fetch lyrics if enabled and no .lrc sidecar exists
         if config.fetch_lyrics:
             try:
@@ -168,6 +174,66 @@ def process_source_file(
         with _in_progress_lock:
             _in_progress.discard(source_path)
         manifest.flush_all()
+
+
+def _tag_source(source_path: str, config: Config) -> None:
+    """Write ReplayGain track tags into *source_path* if it has none.
+
+    The write changes the source's size and mtime. Manifest rows that
+    described the source as it was are updated to match, so the edit is
+    not mistaken for a new source (a tolerant copy would be rebuilt).
+    """
+    edited = replaygain.tag_source(source_path)
+    if edited is None:
+        return
+    before, _after = edited
+    if not is_lossless(source_path) and _has_lossless_source(source_path, config):
+        return  # its output names belong to the lossless source of the stem
+    for output in config.outputs:
+        filename, _action = plan_output(source_path, output)
+        out_path = get_output_file_path(
+            source_path, config.source_path, output.path, filename
+        )
+        manifest.restat(output.path, out_path, before, source_path=source_path)
+
+
+def _carry_replaygain(source_path: str, config: Config) -> None:
+    """Give *source_path*'s existing outputs its ReplayGain track tags.
+
+    Nothing is re-encoded. A copy is copied again, so it stays identical to
+    its source; any other output gets the two tags written into it.
+    """
+    if not is_lossless(source_path) and _has_lossless_source(source_path, config):
+        return  # its outputs belong to the lossless source of the stem
+    try:
+        values = replaygain.read_track_tags(source_path)
+    except Exception as e:  # noqa: BLE001 - unreadable means nothing to carry
+        logger.debug("ReplayGain: cannot read %s: %s", source_path, e)
+        return
+    if replaygain.GAIN_TAG not in values:
+        return
+    for output in config.outputs:
+        filename, action = plan_output(source_path, output)
+        out_path = get_output_file_path(
+            source_path, config.source_path, output.path, filename
+        )
+        if not os.path.exists(out_path):
+            continue
+        try:
+            if replaygain.GAIN_TAG in replaygain.read_track_tags(out_path):
+                continue
+            if action == "copy":
+                if _atomic_copy(source_path, out_path):
+                    manifest.record(
+                        output.path, out_path, config.source_path, source_path, "copy"
+                    )
+                continue
+            before = os.stat(out_path)
+            if replaygain.write_track_tags(out_path, values):
+                manifest.restat(output.path, out_path, before)
+                logger.info("♫ ReplayGain tags → %s", out_path)
+        except Exception as e:  # noqa: BLE001 - one bad output never stops the pass
+            logger.warning("ReplayGain: could not tag %s: %s", out_path, e)
 
 
 def _is_known_failure(source_path: str) -> bool:
@@ -386,6 +452,7 @@ def _process_outputs(source_path: str, config: Config, force: bool) -> bool:
                 manifest.record(
                     output.path, out_path, config.source_path, source_path, "copy"
                 )
+                replaygain.forget(source_path)  # check the new file's tags
             continue
 
         finalize = None
@@ -426,6 +493,7 @@ def _process_outputs(source_path: str, config: Config, force: bool) -> bool:
             manifest.record(
                 output.path, out_path, config.source_path, source_path, kind
             )
+            replaygain.forget(source_path)  # check the new file's tags
     return ok
 
 
