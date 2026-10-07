@@ -379,7 +379,7 @@ def _atomic_copy(source_path: str, out_path: str) -> bool:
         shutil.copy2(source_path, tmp)
         os.replace(tmp, out_path)
         return True
-    except Exception as e:
+    except OSError as e:
         logger.error("Copy failed %s → %s: %s", source_path, out_path, e)
         try:
             if os.path.exists(tmp):
@@ -547,7 +547,7 @@ def delete_outputs(source_path: str, config: Config) -> None:
             try:
                 logger.info("✘ remove %s", filepath)
                 os.remove(filepath)
-            except Exception as e:
+            except OSError as e:
                 logger.error("Failed to remove %s: %s", filepath, e)
 
     # Sidecars are shared by every source of the stem; remove them only
@@ -594,7 +594,7 @@ def sync_sidecars(source_path: str, config: Config) -> None:
                     os.makedirs(os.path.dirname(sidecar_dst), exist_ok=True)
                     shutil.copy2(sidecar_src, sidecar_dst)
                     logger.info("► copy sidecar %s → %s", sidecar_src, sidecar_dst)
-            except Exception as e:
+            except OSError as e:
                 logger.error(
                     "Failed to copy sidecar %s → %s: %s", sidecar_src, sidecar_dst, e
                 )
@@ -618,7 +618,7 @@ def delete_sidecars(source_path: str, config: Config) -> None:
                 try:
                     logger.info("✘ remove sidecar %s", sidecar_path)
                     os.remove(sidecar_path)
-                except Exception as e:
+                except OSError as e:
                     logger.error("Failed to remove sidecar %s: %s", sidecar_path, e)
 
 
@@ -649,10 +649,10 @@ def cleanup_stale_temp_files(config: Config) -> int:
                             logger.info("✘ cleanup stale temp %s", full)
                             os.remove(full)
                             cleaned += 1
-                        except Exception as e:
+                        except OSError as e:
                             logger.error("Failed to remove temp file %s: %s", full, e)
-        except Exception as e:
-            logger.error("Failed to scan %s for temp files: %s", output.path, e)
+        except Exception:
+            logger.exception("Failed to scan %s for temp files", output.path)
     return cleaned
 
 
@@ -675,12 +675,12 @@ def purge_all_outputs(config: Config) -> None:
                     try:
                         logger.info("✘ purge %s", full)
                         os.remove(full)
-                    except Exception as e:
+                    except OSError as e:
                         logger.error("Failed to purge %s: %s", full, e)
             manifest.forget(output.path)
             remove_empty_dirs(output.path)
-        except Exception as e:
-            logger.error("Failed to purge folder %s: %s", output.path, e)
+        except Exception:
+            logger.exception("Failed to purge folder %s", output.path)
 
 
 def initial_sync(config: Config, periodic: bool = False) -> None:
@@ -717,8 +717,8 @@ def initial_sync(config: Config, periodic: bool = False) -> None:
     # Collect source files recursively
     try:
         source_files = walk_audio_files(config.source_path)
-    except Exception as e:
-        logger.error("Failed to scan source: %s", e)
+    except Exception:
+        logger.exception("Failed to scan source")
         return
 
     # Process all source files in parallel (skip stability check - files are on disk)
@@ -730,8 +730,8 @@ def initial_sync(config: Config, periodic: bool = False) -> None:
     def process_one(src_file: str) -> None:
         try:
             process_source_file(src_file, config, force=False, check_stable=False)
-        except Exception as e:
-            logger.error("Error processing %s: %s", src_file, e)
+        except Exception:
+            logger.exception("Error processing %s", src_file)
 
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = [executor.submit(process_one, f) for f in source_files]
@@ -774,8 +774,8 @@ def _cleanup_orphans(config: Config) -> None:
     src_root = config.source_path
     try:
         source_files = walk_audio_files(src_root)
-    except Exception as e:
-        logger.error("Failed to scan source for orphan cleanup: %s", e)
+    except Exception:
+        logger.exception("Failed to scan source for orphan cleanup")
         return
     if not source_files:
         logger.warning(
@@ -813,7 +813,7 @@ def _cleanup_orphans(config: Config) -> None:
         try:
             logger.info("✘ remove %s %s", kind, full)
             os.remove(full)
-        except Exception as e:
+        except OSError as e:
             logger.error("Failed to remove %s: %s", full, e)
 
     for output in config.outputs:
@@ -843,8 +843,8 @@ def _cleanup_orphans(config: Config) -> None:
                         logger.debug("Keeping young or in-progress %s", full)
                         continue
                     remove(full, kind)
-        except Exception as e:
-            logger.error("Failed to scan %s for orphans: %s", output.path, e)
+        except Exception:
+            logger.exception("Failed to scan %s for orphans", output.path)
 
     # Remove empty subdirectories left after orphan cleanup, and forget
     # manifest rows whose output is gone
