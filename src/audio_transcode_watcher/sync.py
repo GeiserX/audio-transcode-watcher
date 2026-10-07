@@ -160,8 +160,12 @@ def process_source_file(
             _tag_source(source_path, config)
         if not _process_outputs(source_path, config, force):
             _remember_failure(source_path)
-        if config.replaygain and not replaygain.is_checked(source_path):
-            _carry_replaygain(source_path, config)
+        # An output that could not be tagged is tried again next scan.
+        if (
+            config.replaygain
+            and not replaygain.is_checked(source_path)
+            and _carry_replaygain(source_path, config)
+        ):
             replaygain.mark_checked(source_path)
         # Auto-fetch lyrics if enabled and no .lrc sidecar exists
         if config.fetch_lyrics:
@@ -201,21 +205,25 @@ def _tag_source(source_path: str, config: Config) -> None:
         manifest.restat(output.path, out_path, before, source_path=source_path)
 
 
-def _carry_replaygain(source_path: str, config: Config) -> None:
+def _carry_replaygain(source_path: str, config: Config) -> bool:
     """Give *source_path*'s existing outputs its ReplayGain track tags.
 
     Nothing is re-encoded. A copy is copied again, so it stays identical to
     its source; any other output gets the two tags written into it.
+
+    Returns False if an output could not be tagged or recopied, so the
+    caller leaves the source unchecked and the next scan tries again.
     """
     if not is_lossless(source_path) and _has_lossless_source(source_path, config):
-        return  # its outputs belong to the lossless source of the stem
+        return True  # its outputs belong to the lossless source of the stem
     try:
         values = replaygain.read_track_tags(source_path)
     except Exception as e:  # noqa: BLE001 - unreadable means nothing to carry
         logger.debug("ReplayGain: cannot read %s: %s", source_path, e)
-        return
+        return True
     if replaygain.GAIN_TAG not in values:
-        return
+        return True
+    ok = True
     for output in config.outputs:
         filename, action = plan_output(source_path, output)
         out_path = get_output_file_path(
@@ -231,6 +239,8 @@ def _carry_replaygain(source_path: str, config: Config) -> None:
                     manifest.record(
                         output.path, out_path, config.source_path, source_path, "copy"
                     )
+                else:
+                    ok = False
                 continue
             before = os.stat(out_path)
             if replaygain.write_track_tags(out_path, values):
@@ -238,6 +248,8 @@ def _carry_replaygain(source_path: str, config: Config) -> None:
                 logger.info("♫ ReplayGain tags → %s", out_path)
         except Exception as e:  # noqa: BLE001 - one bad output never stops the pass
             logger.warning("ReplayGain: could not tag %s: %s", out_path, e)
+            ok = False
+    return ok
 
 
 def _is_known_failure(source_path: str) -> bool:

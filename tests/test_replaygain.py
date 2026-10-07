@@ -503,6 +503,36 @@ class TestCarryEdges:
         assert "could not tag" in caplog.text
         assert abs(_gain(tmp_path / "mp3" / "a.mp3") - EXPECTED_GAIN) < 0.5
 
+    @pytest.mark.skipif(
+        hasattr(os, "geteuid") and os.geteuid() == 0,
+        reason="root writes through a read-only mode",
+    )
+    def test_unwritable_output_is_retried_on_the_next_scan(self, tmp_path, caplog):
+        src = tmp_path / "src"
+        _tone(src / "a.flac")
+        config = _config(src, {"alac": "", "mp3": ""}, tmp_path, rg=False)
+        initial_sync(config)
+        alac = tmp_path / "alac" / "a.m4a"
+        alac.chmod(0o444)  # an output the service cannot write, as root-owned
+        config.replaygain = True
+        try:
+            initial_sync(config, periodic=True)
+            assert f"could not tag {alac}" in caplog.text
+            assert replaygain.read_track_tags(str(alac)) == {}
+            assert abs(_gain(tmp_path / "mp3" / "a.mp3") - EXPECTED_GAIN) < 0.5
+
+            caplog.clear()
+            initial_sync(config, periodic=True)  # still read-only: warned again
+            assert f"could not tag {alac}" in caplog.text
+        finally:
+            alac.chmod(0o644)
+
+        caplog.clear()
+        initial_sync(config, periodic=True)
+        assert "could not tag" not in caplog.text
+        assert abs(_gain(alac) - EXPECTED_GAIN) < 0.5
+        assert replaygain.is_checked(str(src / "a.flac"))
+
     def test_tagging_error_never_blocks_the_encode(self, tmp_path, caplog):
         src = tmp_path / "src"
         _tone(src / "a.flac")
