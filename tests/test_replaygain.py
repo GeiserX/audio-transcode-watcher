@@ -533,6 +533,19 @@ class TestCarryEdges:
         assert abs(_gain(alac) - EXPECTED_GAIN) < 0.5
         assert replaygain.is_checked(str(src / "a.flac"))
 
+    def test_failed_recopy_is_retried_on_the_next_scan(self, tmp_path):
+        src = tmp_path / "src"
+        mp3 = _tone(src / "a.mp3", "-c:a", "libmp3lame")
+        config = _config(src, {"alac": ""}, tmp_path, rg=False)
+        initial_sync(config)
+        config.replaygain = True
+        with patch.object(sync_mod, "_atomic_copy", return_value=False):
+            initial_sync(config, periodic=True)
+        assert not replaygain.is_checked(str(mp3))
+        initial_sync(config, periodic=True)
+        assert filecmp.cmp(mp3, tmp_path / "alac" / "a.mp3", shallow=False)
+        assert replaygain.is_checked(str(mp3))
+
     def test_tagging_error_never_blocks_the_encode(self, tmp_path, caplog):
         src = tmp_path / "src"
         _tone(src / "a.flac")
