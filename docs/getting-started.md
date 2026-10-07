@@ -29,7 +29,7 @@ outputs:
 ```yaml
 services:
   audio-transcoder:
-    image: drumsergio/audio-transcoder:0.7.0
+    image: drumsergio/audio-transcoder:0.7.1
     container_name: audio_transcoder
     environment:
       - TZ=Europe/Madrid
@@ -60,6 +60,6 @@ docker run -d \
   -v /path/to/flac:/music/flac:ro \
   -v /path/to/mp3:/music/mp3 \
   --restart unless-stopped \
-  drumsergio/audio-transcoder:0.7.0
+  drumsergio/audio-transcoder:0.7.1
 ```
 
