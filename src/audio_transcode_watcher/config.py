@@ -143,11 +143,16 @@ class Config:
     fetch_lyrics: bool = True  # Auto-fetch .lrc lyrics via syncedlyrics
     sync_interval_seconds: int = 300  # Seconds between periodic full syncs
     corrupt_source: str = "skip"  # Default for outputs that don't set it
+    replaygain: bool = False  # Write ReplayGain 2.0 track tags (top-level key)
 
     def __post_init__(self) -> None:
         """Validate configuration after initialization."""
         if not self.source_path:
             raise ValueError("source_path is required")
+
+        if not isinstance(self.replaygain, bool):
+            # ValueError, like every other config error, so main reports it.
+            raise ValueError("replaygain must be true or false")  # noqa: TRY004
 
         _check_corrupt_source(self.corrupt_source, "settings.corrupt_source")
 
@@ -206,6 +211,9 @@ class Config:
             fetch_lyrics=settings.get("fetch_lyrics", True),
             sync_interval_seconds=settings.get("sync_interval_seconds", 300),
             corrupt_source=settings.get("corrupt_source", "skip"),
+            # Documented at the top level; also read under settings, where
+            # every other option lives, so either place works.
+            replaygain=data.get("replaygain", settings.get("replaygain", False)),
         )
 
     @classmethod

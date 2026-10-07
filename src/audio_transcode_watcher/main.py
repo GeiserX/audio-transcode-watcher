@@ -65,6 +65,9 @@ def main() -> int:
             output.path,
         )
 
+    if config.replaygain:
+        logger.info("ReplayGain: sources and outputs get track gain tags")
+
     # Perform initial sync
     initial_sync(config)
 

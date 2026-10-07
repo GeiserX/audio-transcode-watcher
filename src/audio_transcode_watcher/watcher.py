@@ -9,6 +9,7 @@ import time
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
+from . import replaygain
 from .config import Config
 from .sync import (
     delete_outputs,
@@ -97,6 +98,9 @@ class AudioSyncHandler(FileSystemEventHandler):
             # Common on Docker bind mounts where .lrc creation triggers
             # a directory mtime change that emits modify for siblings.
             if self._is_cooling_down(event.src_path):
+                return
+            # Our own ReplayGain tag write is not a new version of the file.
+            if replaygain.is_own_write(event.src_path):
                 return
             delete_outputs(event.src_path, self.config)
             self._process_later(event.src_path, force=True)

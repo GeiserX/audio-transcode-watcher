@@ -19,6 +19,10 @@ Each output folder holds `.atw-manifest.json`, a map from each output file to th
 
 FFmpeg runs with `-xerror` and `-err_detect crccheck+explode`, so a frame whose checksum does not match stops the encode. If a source does not decode cleanly, the encode fails even when FFmpeg exits 0 but printed a decode error. The error is logged with the file name and no output is written, unless `corrupt_source: encode_anyway` is set; then the file is encoded once more with FFmpeg's error concealment and marked `tolerant` in the manifest (see [Damaged sources](configuration.md#damaged-sources)). The strict attempt is not repeated until the file's modification time changes, or the service restarts.
 
+## ReplayGain
+
+With `replaygain: true`, each source is checked before its outputs are written. The watcher measures a source with no `REPLAYGAIN_TRACK_GAIN` tag with FFmpeg's `ebur128` filter and tags it in place before encoding, so new outputs carry the tags. It writes the tags into existing outputs that lack them and copies lossy copies again. Each source is checked once per run of the service, and again only when its size or modification time changes. After a tag write, the manifest rows that described the source or output as it was are updated to match, so a `tolerant` copy is not rebuilt, and the watcher ignores the file events its own write causes. See [ReplayGain](configuration.md#replaygain).
+
 ## Recursive Directory Support
 
 Source folder hierarchy is automatically mirrored in all outputs. Both flat and nested structures work out of the box -- no configuration needed.

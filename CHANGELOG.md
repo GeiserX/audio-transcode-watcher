@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [0.7.0] - 2026-10-06
+
+### Added
+
+- `replaygain: true` gives the whole library even volume. It is a top-level key and off by default. The watcher measures every source that has no `REPLAYGAIN_TRACK_GAIN` tag with FFmpeg's EBU R128 filter. It writes ReplayGain 2.0 track gain, -18 LUFS minus the integrated loudness, like `-6.32 dB`, and the true peak as a linear value, like `0.988553`, into the source file in its own tag format. That means Vorbis comments for FLAC, Ogg and Opus, `TXXX` frames for MP3, WAV and AIFF, freeform atoms for M4A, and APEv2 for APE, WavPack and TAK. Every output gets the same two tags. New encodes carry them, existing outputs get them in place without a re-encode, and lossy copies are copied again. The first sync covers the existing library, and every file added later gets the same treatment. The watcher writes no album gain, because the library may be one flat folder. It logs and skips a file it cannot measure. It also recognises its own tag writes and updates the manifest after each one, so tagging a source never re-encodes it or rebuilds a `tolerant` copy. See [ReplayGain](docs/configuration.md#replaygain).
+
 ## [0.6.2] - 2026-10-05
 
 ### Added
@@ -59,6 +65,7 @@ All notable changes to this project are documented here. The format follows [Kee
 - Lossy copies are written through a temp file and renamed, like encodes, so a half-written copy is never visible.
 - `force_reencode: true` purges the outputs once at startup. It used to purge them again on every periodic sync, which re-encoded the whole library every five minutes.
 
+[0.7.0]: https://github.com/GeiserX/audio-transcode-watcher/releases/tag/v0.7.0
 [0.6.2]: https://github.com/GeiserX/audio-transcode-watcher/releases/tag/v0.6.2
 [0.6.1]: https://github.com/GeiserX/audio-transcode-watcher/releases/tag/v0.6.1
 [0.6.0]: https://github.com/GeiserX/audio-transcode-watcher/releases/tag/v0.6.0

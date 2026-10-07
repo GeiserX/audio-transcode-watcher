@@ -1,4 +1,4 @@
-# Audio Transcode Watcher Configuration (0.6.2)
+# Audio Transcode Watcher Configuration (0.7.0)
 # ======================================
 #
 # This configuration file defines the source folder and output destinations
@@ -40,6 +40,12 @@ outputs:
     # Lower rates are never upsampled. Any codec can opt in; 0 = no limit.
     channels: 2
     max_sample_rate: 48000
+
+# Even volume across the library (default: false). Every source without a
+# REPLAYGAIN_TRACK_GAIN tag is measured (EBU R128) and gets ReplayGain 2.0
+# track gain and peak tags, written into the source file itself. Every output
+# gets the same tags, without being re-encoded. No album gain is written.
+replaygain: false
 
 # Optional settings
 settings:

@@ -112,6 +112,40 @@ def output_matches(row: dict, out_path: str) -> bool:
     )
 
 
+def restat(
+    root: str,
+    out_path: str,
+    before: os.stat_result,
+    source_path: str | None = None,
+) -> None:
+    """
+    Keep *out_path*'s row trusted after a file was edited in place.
+
+    A tag write changes a file's size and mtime. With *source_path*, the
+    edited file is the source: the row's source size and mtime are updated
+    if they matched *before*. Without it, the edited file is *out_path*
+    and its output size and mtime are updated the same way. A row that no
+    longer described the file before the edit is left alone.
+    """
+    edited = source_path or out_path
+    try:
+        st = os.stat(edited)
+    except OSError:
+        return
+    fields = ("size", "mtime") if source_path else ("output_size", "output_mtime")
+    with _lock:
+        row = _load(root).get(_key(root, out_path))
+        if not row:
+            return
+        if (row.get(fields[0]), row.get(fields[1])) != (
+            before.st_size,
+            before.st_mtime,
+        ):
+            return
+        row[fields[0]], row[fields[1]] = st.st_size, st.st_mtime
+        _dirty.add(root)
+
+
 def prune(root: str) -> int:
     """Drop rows whose output file is gone. Returns how many were dropped."""
     with _lock:

@@ -1,6 +1,6 @@
 # Roadmap
 
-Current version: **0.6.2**
+Current version: **0.7.0**
 
 ## Completed
 
@@ -14,8 +14,9 @@ Current version: **0.6.2**
 - **Lossy sources copied, not inflated**, corrupt sources fail loudly, ReplayGain and MusicBrainz tags kept in M4A outputs, configurable periodic sync (v0.6.0)
 - **Portable AAC**: stereo downmix and a 48 kHz cap for AAC outputs, per-output `channels` and `max_sample_rate` (v0.6.1)
 - **Damaged sources**: `corrupt_source: encode_anyway` makes a concealed copy instead of none (v0.6.2)
+- **Even volume**: `replaygain: true` writes ReplayGain 2.0 track tags into every source and output (v0.7.0)
 
-## v0.7.0 -- Quality of Life
+## v0.7.x -- Quality of Life
 
 - [ ] **Progress reporting during initial sync**
   - Show file count progress (e.g. 42/500)
