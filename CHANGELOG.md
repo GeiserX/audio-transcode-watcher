@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [0.7.1] - 2026-10-07
+
+### Fixed
+
+- An output whose ReplayGain tags could not be written is now tried again on the next periodic sync. Before, one failed write (for example a root-owned ALAC file answering "Permission denied") marked its source as done, so the output stayed untagged until the source changed or the service restarted. Each failed attempt logs the same warning, and the source counts as done only once every output has its tags.
+- Errors are no longer swallowed silently. File operations now catch only filesystem errors and log them as before. The broad catches that stay, such as the one around each file of a sync, log the full traceback, and lyric metadata reads and unreadable folders log at debug level. A failed removal of a leftover temp file is now logged too.
+
 ## [0.7.0] - 2026-10-06
 
 ### Added
@@ -65,6 +72,7 @@ All notable changes to this project are documented here. The format follows [Kee
 - Lossy copies are written through a temp file and renamed, like encodes, so a half-written copy is never visible.
 - `force_reencode: true` purges the outputs once at startup. It used to purge them again on every periodic sync, which re-encoded the whole library every five minutes.
 
+[0.7.1]: https://github.com/GeiserX/audio-transcode-watcher/releases/tag/v0.7.1
 [0.7.0]: https://github.com/GeiserX/audio-transcode-watcher/releases/tag/v0.7.0
 [0.6.2]: https://github.com/GeiserX/audio-transcode-watcher/releases/tag/v0.6.2
 [0.6.1]: https://github.com/GeiserX/audio-transcode-watcher/releases/tag/v0.6.1

@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import time
 import unicodedata
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 # Audio file extensions considered as source files
 LOSSLESS_EXTENSIONS = {
@@ -121,6 +124,7 @@ def appears_empty_dir(path: str) -> bool:
         return True
     except Exception:
         # On any error, treat as empty to be safe
+        logger.debug("Cannot list %s, treating it as empty", path, exc_info=True)
         return True
 
 

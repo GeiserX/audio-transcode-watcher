@@ -16,20 +16,22 @@ from .watcher import start_watcher
 
 def setup_logging() -> None:
     """Configure logging for the application."""
-    # Ensure Unicode output works
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
+
+    # Ensure Unicode output works (reconfigure changes the stream in place,
+    # so the handler above writes UTF-8 too)
     try:
         if hasattr(sys.stdout, "reconfigure"):
             sys.stdout.reconfigure(encoding="utf-8")
         if hasattr(sys.stderr, "reconfigure"):
             sys.stderr.reconfigure(encoding="utf-8")
     except Exception:
-        pass
-
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s: %(message)s",
-        datefmt="%H:%M:%S",
-    )
+        logger = logging.getLogger(__name__)
+        logger.warning("Could not switch output to UTF-8", exc_info=True)
 
 
 def main() -> int:

@@ -75,7 +75,7 @@ def extract_metadata(filepath: str) -> tuple[str, str] | None:
                 if artist and title:
                     return artist, title
     except Exception:
-        logger.debug("Could not read metadata from %s", filepath)
+        logger.debug("Could not read metadata from %s", filepath, exc_info=True)
 
     # Fallback: parse filename "Artist - Title.ext"
     stem = Path(filepath).stem

@@ -347,8 +347,8 @@ def atomic_ffmpeg_encode(
     try:
         if os.path.exists(tmp_dest):
             os.remove(tmp_dest)
-    except Exception:
-        pass
+    except OSError as e:
+        logger.warning("Could not remove stale temp file %s: %s", tmp_dest, e)
 
     # Replace destination with temp path
     cmd = list(cmd)
@@ -378,12 +378,14 @@ def atomic_ffmpeg_encode(
         try:
             finalize(tmp_dest)
         except Exception as e:
-            logger.warning("Post-encode step failed for %s: %s", final_dest, e)
+            logger.warning(
+                "Post-encode step failed for %s: %s", final_dest, e, exc_info=True
+            )
 
     try:
         os.replace(tmp_dest, final_dest)
         return 0
-    except Exception as e:
+    except OSError as e:
         logger.error("Atomic replace failed for %s: %s", final_dest, e)
         _cleanup_temp(tmp_dest)
         return 1
@@ -464,5 +466,5 @@ def _cleanup_temp(path: str) -> None:
     try:
         if os.path.exists(path):
             os.remove(path)
-    except Exception:
-        pass
+    except OSError as e:
+        logger.warning("Could not remove temp file %s: %s", path, e)
