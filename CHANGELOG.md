@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [0.7.2] - 2026-10-21
+
+### Security
+
+- The image no longer trusts the eight eMudhra (emSign) intermediates whose private keys leaked in October 2026: certifi goes to 2026.10.19 and the system `ca-certificates` to the trixie-security release that distrusts them. Before, a certificate minted with those keys for any site was accepted, lyrics lookups included.
+
 ## [0.7.1] - 2026-10-07
 
 ### Fixed
@@ -72,6 +78,7 @@ All notable changes to this project are documented here. The format follows [Kee
 - Lossy copies are written through a temp file and renamed, like encodes, so a half-written copy is never visible.
 - `force_reencode: true` purges the outputs once at startup. It used to purge them again on every periodic sync, which re-encoded the whole library every five minutes.
 
+[0.7.2]: https://github.com/GeiserX/audio-transcode-watcher/releases/tag/v0.7.2
 [0.7.1]: https://github.com/GeiserX/audio-transcode-watcher/releases/tag/v0.7.1
 [0.7.0]: https://github.com/GeiserX/audio-transcode-watcher/releases/tag/v0.7.0
 [0.6.2]: https://github.com/GeiserX/audio-transcode-watcher/releases/tag/v0.6.2
