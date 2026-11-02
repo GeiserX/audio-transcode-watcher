@@ -1,4 +1,4 @@
-FROM python:3.14-slim
+FROM python:3.15-slim
 
 # Install FFmpeg for transcoding. The base image's ca-certificates 20250419 still
 # trusts the compromised eMudhra intermediates; trixie-security distrusts them.
