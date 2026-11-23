@@ -112,6 +112,37 @@ def safety_guard_active(config: Config) -> bool:
     return False
 
 
+def is_ignored_file(file_path: str, config: Config) -> bool:
+    """
+    Check if config.ignored_files paths apply to the current file we're trying to process
+
+    Each pattern is a path relative to the source folder and matches whole
+    path parts: ".stversions" (or ".stversions/") matches everything inside
+    that folder, but not ".stversions-old/".
+    """
+    if not config.ignored_files:
+        return False
+
+    # Find file within source dir
+    # IE my/files/nested/file.mp3 becomes nested/file.mp3, if source_path is my/files
+    rel = os.path.relpath(nfc_path(file_path), nfc_path(config.source_path))
+    rel_parts = Path(rel).parts
+    if not rel_parts or rel_parts[0] == os.pardir:
+        return False
+
+    for pattern in config.ignored_files:
+        parts = Path(nfc(pattern).strip("/")).parts
+        if parts and rel_parts[: len(parts)] == parts:
+            # Debug, not info: a periodic sync would log every ignored file.
+            logger.debug(
+                "Skipping file: %s (ignored by ignored_files config)",
+                file_path,
+            )
+            return True
+
+    return False
+
+
 def process_source_file(
     source_path: str,
     config: Config,
@@ -128,6 +159,10 @@ def process_source_file(
         check_stable: If True, wait for file to be stable first
     """
     source_path = nfc_path(source_path)
+
+    # First: a string check, cheaper than the stat and the folder scans below.
+    if is_ignored_file(source_path, config):
+        return
 
     if not is_audio_file(source_path):
         return
@@ -573,6 +608,10 @@ def sync_sidecars(source_path: str, config: Config) -> None:
 
     for ext in SIDECAR_EXTENSIONS:
         sidecar_src = nfc_path(os.path.join(source_dir, f"{stem}{ext}"))
+        # Checked per sidecar: the watcher calls this directly for .lrc events,
+        # and an entry can name the sidecar itself (Album/song.lrc).
+        if is_ignored_file(sidecar_src, config):
+            continue
         if not os.path.isfile(sidecar_src):
             continue
 

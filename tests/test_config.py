@@ -4,6 +4,7 @@ import json
 import logging
 
 import pytest
+import yaml
 
 from audio_transcode_watcher.config import (
     CODEC_EXTENSIONS,
@@ -127,6 +128,36 @@ class TestConfig:
         with pytest.raises(ValueError, match="Duplicate output paths"):
             Config(source_path="/music", outputs=outputs)
 
+    def test_ignored_files_defaults_to_empty(self, sample_output_config):
+        """No ignored_files, or the key with no items, means an empty list."""
+        config = Config(source_path="/music", outputs=[sample_output_config])
+        assert config.ignored_files == []
+
+        config = Config(
+            source_path="/music", outputs=[sample_output_config], ignored_files=None
+        )
+        assert config.ignored_files == []
+
+        data = {
+            "source": {"path": "/music"},
+            "outputs": [{"name": "out1", "codec": "mp3", "path": "/music/mp3"}],
+            "settings": yaml.safe_load("ignored_files:\n"),
+        }
+        assert Config.from_dict(data).ignored_files == []
+
+    @pytest.mark.parametrize(
+        "value",
+        [".stversions/", [""], ["/"], ["."], [123], [None], {"a": 1}],
+    )
+    def test_invalid_ignored_files_raises_error(self, sample_output_config, value):
+        """A value that is not a list of paths stops at startup."""
+        with pytest.raises(ValueError, match="ignored_files must be a list of paths"):
+            Config(
+                source_path="/music",
+                outputs=[sample_output_config],
+                ignored_files=value,
+            )
+
     def test_output_paths_property(self, sample_config):
         """Test the output_paths property."""
         paths = sample_config.output_paths
@@ -152,6 +183,7 @@ class TestConfig:
             "settings": {
                 "force_reencode": True,
                 "stability_timeout": 30.0,
+                "ignored_files": ["test-dir/"],
             },
         }
         config = Config.from_dict(data)
@@ -159,6 +191,7 @@ class TestConfig:
         assert len(config.outputs) == 1
         assert config.force_reencode is True
         assert config.stability_timeout == 30.0
+        assert config.ignored_files == ["test-dir/"]
 
     def test_from_yaml_file(self, yaml_config_file):
         """Test loading Config from a YAML file."""

@@ -1,7 +1,9 @@
 """Tests for sync module."""
 
 import json
+import logging
 import os
+import unicodedata
 from pathlib import Path
 from unittest.mock import patch
 
@@ -18,6 +20,7 @@ from audio_transcode_watcher.sync import (
     delete_outputs,
     delete_sidecars,
     initial_sync,
+    is_ignored_file,
     process_source_file,
     purge_all_outputs,
     safety_guard_active,
@@ -120,6 +123,170 @@ class TestSafetyGuard:
 
         # Source has only hidden file, should be considered empty
         assert safety_guard_active(config) is True
+
+
+class TestIsIgnoredFile:
+    """Tests for is_ignored_file function."""
+
+    def test_when_ignored_files_empty(self, temp_dir):
+        """File is not ignored when config is empty."""
+        source = Path(temp_dir) / "source"
+        source.mkdir()
+        (source / "file.flac").touch()
+
+        output = Path(temp_dir) / "output"
+
+        config = Config(
+            source_path=str(source),
+            outputs=[OutputConfig(name="out", codec="alac", path=str(output))],
+        )
+
+        assert is_ignored_file(str(source / "file.flac"), config) is False
+
+    def test_neighbours_of_ignored_file(self, temp_dir):
+        """Neighbours of nested selector are not ignored"""
+        source = Path(temp_dir) / "source"
+        source.mkdir()
+
+        for rel in ["test/folder/ignore/file.flac", "test/folder/keep.flac"]:
+            path = source / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.touch()
+
+        output = Path(temp_dir) / "output"
+
+        config = Config(
+            source_path=str(source),
+            outputs=[OutputConfig(name="out", codec="alac", path=str(output))],
+            ignored_files=["test/folder/ignore"],
+        )
+
+        assert (
+            is_ignored_file(
+                str(source / "test" / "folder" / "ignore" / "file.flac"), config
+            )
+            is True
+        )
+        assert (
+            is_ignored_file(str(source / "test" / "folder" / "keep.flac"), config)
+            is False
+        )
+
+    def test_when_ignored_files_nested(self, temp_dir):
+        """Files are ignored even if they are nested."""
+        source = Path(temp_dir) / "source"
+        source.mkdir()
+
+        for rel in [
+            "ignore/file.flac",  # To ignore
+            "ignore/test/file.flac",  # To ignore
+            "keep/ignore/file.flac",  # To keep
+            "ignore-not-really/file.flac",  # To keep
+        ]:
+            path = source / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.touch()
+
+        output = Path(temp_dir) / "output"
+
+        config = Config(
+            source_path=str(source),
+            outputs=[OutputConfig(name="out", codec="alac", path=str(output))],
+            ignored_files=["ignore/"],
+        )
+
+        assert is_ignored_file(str(source / "ignore" / "file.flac"), config) is True
+        assert (
+            is_ignored_file(str(source / "ignore" / "test" / "file.flac"), config)
+            is True
+        )
+        assert (
+            is_ignored_file(str(source / "keep" / "ignore" / "file.flac"), config)
+            is False
+        )
+        assert (
+            is_ignored_file(str(source / "ignore-not-really" / "file.flac"), config)
+            is False
+        )
+
+    def test_when_ignored_files_found(self, temp_dir):
+        """Files are ignored if they are matched at the top level."""
+        source = Path(temp_dir) / "source"
+        source.mkdir()
+        (source / "file.flac").touch()
+
+        output = Path(temp_dir) / "output"
+
+        config = Config(
+            source_path=str(source),
+            outputs=[OutputConfig(name="out", codec="alac", path=str(output))],
+            ignored_files=["file.flac"],
+        )
+
+        assert is_ignored_file(str(source / "file.flac"), config) is True
+
+    @staticmethod
+    def _config(source, ignored):
+        return Config(
+            source_path=str(source),
+            outputs=[OutputConfig(name="out", codec="alac", path="/out")],
+            ignored_files=ignored,
+        )
+
+    def test_pattern_matches_whole_path_parts(self):
+        """A pattern never matches a longer folder or file name."""
+        config = self._config("/music", ["ignore"])
+
+        assert is_ignored_file("/music/ignore/file.flac", config) is True
+        assert is_ignored_file("/music/ignore-not-really/file.flac", config) is False
+        assert is_ignored_file("/music/ignore.flac", config) is False
+
+        config = self._config("/music", ["Pink"])
+        assert is_ignored_file("/music/Pink Floyd/song.flac", config) is False
+
+    def test_source_name_repeated_inside_path(self):
+        """Only the leading source folder is stripped from the path."""
+        config = self._config("/music", ["music videos/"])
+        assert is_ignored_file("/music/music videos/a.flac", config) is True
+
+        config = self._config("/music", ["videos/"])
+        assert is_ignored_file("/music/music videos/a.flac", config) is False
+
+        config = self._config("/m", ["Album/mix.flac"])
+        assert is_ignored_file("/m/Album/mix.flac", config) is True
+
+    def test_sibling_of_source_folder_is_not_matched(self):
+        """A file outside the source folder is never ignored."""
+        config = self._config("/music", [".stversions/"])
+        assert is_ignored_file("/music2/.stversions/a.flac", config) is False
+
+        config = self._config("/music", ["../music2/"])
+        assert is_ignored_file("/music2/a.flac", config) is False
+
+    def test_source_path_with_trailing_slash(self):
+        """A trailing slash on source.path does not change the match."""
+        config = self._config("/music/", [".stversions/"])
+        assert is_ignored_file("/music/.stversions/a.flac", config) is True
+
+    def test_pattern_spellings_of_one_folder(self):
+        """Leading slash, trailing slash and ./ all name the same folder."""
+        for pattern in [".stversions", ".stversions/", "/.stversions", "./.stversions"]:
+            config = self._config("/music", [pattern])
+            assert is_ignored_file("/music/.stversions/a.flac", config) is True
+
+    def test_unicode_forms_match(self):
+        """An NFD pattern matches the NFC path, and the other way round."""
+        nfc_name = unicodedata.normalize("NFC", "Música")
+        nfd_name = unicodedata.normalize("NFD", "Música")
+
+        config = self._config("/music", [f"{nfd_name}/"])
+        assert is_ignored_file(f"/music/{nfc_name}/a.flac", config) is True
+
+        config = self._config("/music", [f"{nfc_name}/"])
+        assert is_ignored_file(f"/music/{nfd_name}/a.flac", config) is True
+
+        config = self._config(f"/{nfd_name}", [".stversions/"])
+        assert is_ignored_file(f"/{nfc_name}/.stversions/a.flac", config) is True
 
 
 class TestProcessSourceFile:
@@ -410,6 +577,52 @@ class TestSyncSidecars:
         assert (out1 / "Artist - Song.lrc").exists()
         assert (out2 / "Artist - Song.lrc").exists()
         assert (out1 / "Artist - Song.lrc").read_text() == "[00:01.00] Hello"
+
+    def test_skips_lrc_in_ignored_folder(self, temp_dir):
+        """A .lrc inside an ignored folder is not copied; its neighbours are."""
+        source = Path(temp_dir) / "source"
+        versions = source / ".stversions" / "Album"
+        versions.mkdir(parents=True)
+        (versions / "song~20240101-120000.lrc").write_text("[00:01.00] Old")
+        album = source / "Album"
+        album.mkdir()
+        (album / "song.lrc").write_text("[00:01.00] New")
+
+        output = Path(temp_dir) / "output"
+        output.mkdir()
+
+        config = Config(
+            source_path=str(source),
+            outputs=[OutputConfig(name="out", codec="aac", path=str(output))],
+            ignored_files=[".stversions/"],
+        )
+
+        sync_sidecars(str(versions / "song~20240101-120000.lrc"), config)
+        sync_sidecars(str(album / "song.lrc"), config)
+
+        assert not (output / ".stversions").exists()
+        assert (output / "Album" / "song.lrc").read_text() == "[00:01.00] New"
+
+    def test_skips_lrc_named_in_ignored_files(self, temp_dir):
+        """An entry that names the .lrc itself keeps it out of the outputs."""
+        source = Path(temp_dir) / "source"
+        album = source / "Album"
+        album.mkdir(parents=True)
+        (album / "song.flac").touch()
+        (album / "song.lrc").write_text("[00:01.00] Hello")
+
+        output = Path(temp_dir) / "output"
+        output.mkdir()
+
+        config = Config(
+            source_path=str(source),
+            outputs=[OutputConfig(name="out", codec="aac", path=str(output))],
+            ignored_files=["Album/song.lrc"],
+        )
+
+        sync_sidecars(str(album / "song.flac"), config)
+
+        assert not (output / "Album" / "song.lrc").exists()
 
     def test_skips_when_no_lrc_exists(self, temp_dir):
         """Test that nothing happens when source has no .lrc file."""
@@ -769,6 +982,67 @@ class TestProcessSourceFileLyrics:
 
         process_source_file(str(flac), config, force=True, check_stable=False)
         _sync.assert_called_once()
+
+
+class TestProcessSourceFileIgnored:
+    """Tests for ignored_files in process_source_file."""
+
+    @staticmethod
+    def _tree(temp_dir):
+        source = Path(temp_dir) / "source"
+        versions = source / ".stversions" / "Album"
+        versions.mkdir(parents=True)
+        ignored = versions / "Song~20240101-120000.flac"
+        ignored.touch()
+        out = Path(temp_dir) / "output"
+        out.mkdir()
+        config = Config(
+            source_path=str(source),
+            outputs=[OutputConfig(name="mp3", codec="mp3", path=str(out))],
+            ignored_files=[".stversions/"],
+            replaygain=True,
+            fetch_lyrics=True,
+        )
+        return config, ignored, out
+
+    @patch("audio_transcode_watcher.sync.sync_sidecars")
+    @patch("audio_transcode_watcher.sync.fetch_lyrics_for_file")
+    @patch("audio_transcode_watcher.sync._tag_source")
+    @patch("audio_transcode_watcher.sync.atomic_ffmpeg_encode", return_value=0)
+    @patch("audio_transcode_watcher.sync.safety_guard_active", return_value=False)
+    def test_ignored_file_gets_nothing(
+        self, _guard, mock_encode, mock_tag, mock_lyrics, mock_sidecars, temp_dir
+    ):
+        """No encode, no ReplayGain tag, no lyrics and no sidecars."""
+        config, ignored, out = self._tree(temp_dir)
+
+        process_source_file(str(ignored), config, force=True, check_stable=False)
+
+        mock_encode.assert_not_called()
+        mock_tag.assert_not_called()
+        mock_lyrics.assert_not_called()
+        mock_sidecars.assert_not_called()
+        assert list(out.iterdir()) == []
+
+    @patch("audio_transcode_watcher.sync.safety_guard_active", return_value=False)
+    def test_checked_before_the_folder_scans(self, mock_guard, temp_dir):
+        """An ignored file never pays for the safety guard's folder scans."""
+        config, ignored, _ = self._tree(temp_dir)
+
+        process_source_file(str(ignored), config, check_stable=False)
+
+        mock_guard.assert_not_called()
+
+    @patch("audio_transcode_watcher.sync.safety_guard_active", return_value=False)
+    def test_skip_is_logged_at_debug(self, _guard, temp_dir, caplog):
+        """A periodic sync must not log one INFO line per ignored file."""
+        config, ignored, _ = self._tree(temp_dir)
+
+        with caplog.at_level(logging.DEBUG, logger="audio_transcode_watcher.sync"):
+            process_source_file(str(ignored), config, check_stable=False)
+
+        skips = [r for r in caplog.records if "ignored by ignored_files" in r.message]
+        assert [r.levelno for r in skips] == [logging.DEBUG]
 
 
 class TestProcessSourceFileConcurrency:

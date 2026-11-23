@@ -140,6 +140,7 @@ class Config:
     parallel_workers: int = 4  # Number of parallel encoding workers
     stability_timeout: float = 60.0
     min_stable_seconds: float = 1.0
+    ignored_files: list[str] = field(default_factory=list)
     fetch_lyrics: bool = True  # Auto-fetch .lrc lyrics via syncedlyrics
     sync_interval_seconds: int = 300  # Seconds between periodic full syncs
     corrupt_source: str = "skip"  # Default for outputs that don't set it
@@ -163,6 +164,18 @@ class Config:
             or interval <= 0
         ):
             raise ValueError("sync_interval_seconds must be a number greater than 0")
+
+        # "ignored_files:" with no items loads as None.
+        if self.ignored_files is None:
+            self.ignored_files = []
+        # A plain string would be read one character at a time, and an empty
+        # or "/" item would match every file, so both are refused here.
+        if not isinstance(self.ignored_files, list) or not all(
+            isinstance(p, str) and Path(p.strip("/")).parts for p in self.ignored_files
+        ):
+            raise ValueError(
+                "settings.ignored_files must be a list of paths inside the source folder"
+            )
 
         if not self.outputs:
             raise ValueError("At least one output is required")
@@ -208,6 +221,7 @@ class Config:
             parallel_workers=settings.get("parallel_workers", 4),
             stability_timeout=settings.get("stability_timeout", 60.0),
             min_stable_seconds=settings.get("min_stable_seconds", 1.0),
+            ignored_files=settings.get("ignored_files", []),
             fetch_lyrics=settings.get("fetch_lyrics", True),
             sync_interval_seconds=settings.get("sync_interval_seconds", 300),
             corrupt_source=settings.get("corrupt_source", "skip"),
