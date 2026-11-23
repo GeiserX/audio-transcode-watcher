@@ -306,6 +306,13 @@ class TestProbe:
             assert not utils.is_lossless(str(path))
         assert "Could not read the codec" in caplog.text
 
+    def test_a_failed_run_that_names_a_codec_counts_as_aac(self, temp_dir):
+        path = Path(temp_dir) / "a.m4a"
+        path.write_bytes(b"x")
+        failed = subprocess.CompletedProcess([], 1, "alac\n", "Invalid data found\n")
+        with patch("subprocess.run", return_value=failed):
+            assert utils.source_format(str(path)) == "aac"
+
     @needs_ffmpeg
     def test_real_files(self, temp_dir):
         alac, aac = Path(temp_dir) / "l.m4a", Path(temp_dir) / "y.m4a"
@@ -483,6 +490,27 @@ class TestAlacSourceIsLossless:
         probe.answers["x.m4a"] = "alac"
         assert _yields_to_twin(str(source / "x.m4a"), config)
         assert not _yields_to_twin(str(source / "x.flac"), config)
+
+    def test_lossy_twins_do_not_yield_to_each_other(self, temp_dir, probe):
+        source, config = _config(temp_dir, codecs=("aac",))
+        _touch(source, "x.m4a", "x.mp3")
+        probe.answers["x.m4a"] = "aac"
+        assert not _yields_to_twin(str(source / "x.mp3"), config)
+        assert not _yields_to_twin(str(source / "x.m4a"), config)
+
+    def test_a_later_flac_leaves_a_changed_alac_encode_alone(self, temp_dir, probe):
+        source, config = _config(temp_dir, codecs=("aac",))
+        out = Path(temp_dir) / "aac"
+        _touch(source, "x.m4a")
+        probe.answers["x.m4a"] = "alac"
+        with patch(ENCODE, side_effect=_fake_encode(b"from alac")):
+            process_source_file(str(source / "x.m4a"), config, check_stable=False)
+        (out / "x.m4a").write_bytes(b"edited by hand")  # the row no longer matches
+        _touch(source, "x.flac")
+        with patch(ENCODE, side_effect=_fake_encode(b"from flac")) as enc:
+            process_source_file(str(source / "x.flac"), config, check_stable=False)
+        enc.assert_not_called()
+        assert (out / "x.m4a").read_bytes() == b"edited by hand"
 
     def test_a_flac_that_arrives_later_replaces_the_alac_encode(
         self, temp_dir, probe, caplog
