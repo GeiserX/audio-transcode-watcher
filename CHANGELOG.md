@@ -11,8 +11,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Fixed
 
-- An ALAC `.m4a` source is now treated as lossless. Before, every `.m4a` counted as AAC, so an ALAC file was copied unchanged into an AAC output, which left a lossless file in the AAC folder, and it was never encoded into a FLAC or WAV output. The watcher now asks `ffprobe` which codec an `.m4a` holds, once per file version. An ALAC source is encoded into every output, and it wins over a lossy file with the same name, as a FLAC does. A FLAC next to an ALAC file of the same name still wins. An `.m4a` that `ffprobe` cannot read logs one WARNING and is treated as AAC, as before.
-- An encode from an M4A source into an ALAC or AAC output keeps the ReplayGain, MusicBrainz and other freeform tags. FFmpeg drops them, and they were only copied back from FLAC, Ogg, APE and ID3 sources.
+- An ALAC `.m4a` source is now treated as lossless. Before, every `.m4a` counted as AAC, so an ALAC file was copied unchanged into an AAC output, which left a lossless file in the AAC folder, and it was never encoded into a FLAC or WAV output. The watcher now asks `ffprobe` which codec an `.m4a` holds, once per file version. An ALAC source is encoded into every output, and it wins over a lossy file with the same name, as a FLAC does. A FLAC next to an ALAC file of the same name still wins, also when it arrives after the ALAC file was encoded. An `.m4a` that `ffprobe` cannot read logs one WARNING and is treated as AAC, as before.
+- An encode from an M4A source into an ALAC or AAC output keeps the ReplayGain, MusicBrainz and other freeform tags, in UTF-8 or UTF-16. FFmpeg drops them, and they were only copied back from FLAC, Ogg, APE and ID3 sources.
 
 ### Upgrading
 

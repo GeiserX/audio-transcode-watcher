@@ -212,6 +212,8 @@ def _unwanted_format(path: str, config: Config) -> bool:
         return False
     if os.path.isdir(path):
         return False
+    if config.source_formats.isdisjoint(formats):
+        return True
     return source_format(path) not in config.source_formats
 
 
@@ -567,6 +569,32 @@ def _made_from(
     return row.get("source") == rel
 
 
+def _made_from_weaker_twin(
+    output: OutputConfig, out_path: str, source_path: str, config: Config
+) -> bool:
+    """True if the manifest says a lossless twin that ranks lower made *out_path*.
+
+    This is the encode of an ALAC ``.m4a`` made before a FLAC of the same
+    name arrived: the FLAC wins, so the file is rebuilt from it. Outputs of
+    the same source or of an equal-ranked twin are left alone.
+    """
+    if _source_rank(source_path) < 2:
+        return False
+    row = manifest.lookup(output.path, out_path)
+    if (
+        not row
+        or row.get("kind") not in ("encode", "tolerant")
+        or not row.get("source")
+    ):
+        return False
+    if _made_from(output, out_path, source_path, config):
+        return False
+    # An encode from an .m4a is an encode from ALAC, which ranks 1.
+    if Path(row["source"]).suffix.lower() not in PROBED_EXTENSIONS:
+        return False
+    return manifest.output_matches(row, out_path)
+
+
 def _made_from_ignored(output: OutputConfig, out_path: str, config: Config) -> bool:
     """True if the manifest says a source that is now ignored made *out_path*.
 
@@ -644,6 +672,12 @@ def _process_outputs(source_path: str, config: Config, force: bool) -> bool:
                         out_path,
                         source_path,
                     )
+            elif _made_from_weaker_twin(output, out_path, source_path, config):
+                logger.info(
+                    "Replacing %s: it was made from an ALAC twin, %s wins",
+                    out_path,
+                    source_path,
+                )
             elif _made_from_ignored(output, out_path, config):
                 logger.info(
                     "Replacing %s: its source is %s, %s wins",

@@ -346,6 +346,12 @@ class TestFormatFilter:
         found = sorted(Path(f).name for f in walk_sources(config))
         assert found == ["b.m4a", "c.aac"]
 
+    def test_m4a_is_not_probed_when_neither_is_listed(self, temp_dir, probe):
+        source, config = _config(temp_dir, ["flac"])
+        _touch(source, "a.m4a", "c.flac")
+        assert [Path(f).name for f in walk_sources(config)] == ["c.flac"]
+        assert probe.calls == []
+
     def test_m4a_is_not_probed_when_both_are_listed(self, temp_dir, probe):
         source, config = _config(temp_dir, ["alac", "aac"])
         _touch(source, "a.m4a", "c.flac")
@@ -478,6 +484,37 @@ class TestAlacSourceIsLossless:
         assert _yields_to_twin(str(source / "x.m4a"), config)
         assert not _yields_to_twin(str(source / "x.flac"), config)
 
+    def test_a_flac_that_arrives_later_replaces_the_alac_encode(
+        self, temp_dir, probe, caplog
+    ):
+        source, config = _config(temp_dir, codecs=("aac",))
+        out = Path(temp_dir) / "aac"
+        _touch(source, "x.m4a")
+        probe.answers["x.m4a"] = "alac"
+        with patch(ENCODE, side_effect=_fake_encode(b"from alac")):
+            process_source_file(str(source / "x.m4a"), config, check_stable=False)
+        _touch(source, "x.flac")
+        with (
+            patch(ENCODE, side_effect=_fake_encode(b"from flac")),
+            caplog.at_level(logging.INFO, logger="audio_transcode_watcher.sync"),
+        ):
+            process_source_file(str(source / "x.flac"), config, check_stable=False)
+            # Processing it again changes nothing: the row names the FLAC now.
+            process_source_file(str(source / "x.flac"), config, check_stable=False)
+        assert (out / "x.m4a").read_bytes() == b"from flac"
+        assert caplog.text.count("it was made from an ALAC twin") == 1
+
+    def test_an_equal_twin_does_not_replace_an_encode(self, temp_dir):
+        source, config = _config(temp_dir, codecs=("aac",))
+        out = Path(temp_dir) / "aac"
+        _touch(source, "x.wav")
+        with patch(ENCODE, side_effect=_fake_encode(b"from wav")):
+            process_source_file(str(source / "x.wav"), config, check_stable=False)
+        _touch(source, "x.flac")
+        with patch(ENCODE, side_effect=_fake_encode(b"from flac")):
+            process_source_file(str(source / "x.flac"), config, check_stable=False)
+        assert (out / "x.m4a").read_bytes() == b"from wav"
+
     def test_deleting_an_alac_source_removes_its_outputs(self, temp_dir, probe):
         source, config = _config(temp_dir, codecs=("flac", "aac"))
         _touch(source, "x.m4a", "y.flac")
@@ -558,6 +595,17 @@ class TestRealAlacSource:
 
 
 class TestMp4SourceTags:
+    def test_utf16_freeform_values_are_decoded(self):
+        from mutagen.mp4 import AtomDataType
+
+        from audio_transcode_watcher.encoder import _mp4_text
+
+        utf16 = MP4FreeForm("Señal".encode("utf-16-be"), AtomDataType.UTF16)
+        assert _mp4_text(utf16) == "Señal"
+        assert _mp4_text(MP4FreeForm("Señal".encode())) == "Señal"
+        assert _mp4_text("Artist, The") == "Artist, The"
+        assert _mp4_text(b"raw") == "raw"
+
     def test_freeform_atoms_of_an_m4a_source_are_copied(self, temp_dir):
         src, dest = Path(temp_dir) / "s.m4a", Path(temp_dir) / "d.m4a"
         with patch("mutagen.File") as open_file:

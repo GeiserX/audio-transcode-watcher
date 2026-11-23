@@ -9,7 +9,7 @@ from collections.abc import Callable
 
 import mutagen
 from mutagen.apev2 import APETextValue
-from mutagen.mp4 import MP4, MP4FreeForm, MP4Tags
+from mutagen.mp4 import MP4, AtomDataType, MP4FreeForm, MP4Tags
 
 from .config import OutputConfig
 from .utils import nfc_path
@@ -408,10 +408,7 @@ def _source_tag_values(source: str) -> dict[str, list[str]]:
     if isinstance(tags, MP4Tags):
         found: dict[str, list[str]] = {}
         for name, atom in MP4_TAG_ATOMS.items():
-            values = [
-                bytes(v).decode("utf-8", "replace") if isinstance(v, bytes) else str(v)
-                for v in tags.get(atom, [])
-            ]
+            values = [_mp4_text(v) for v in tags.get(atom, [])]
             values = [v for v in values if v.strip()]
             if values:
                 found[name] = values
@@ -449,6 +446,16 @@ def _source_tag_values(source: str) -> dict[str, list[str]]:
         if values:
             out[name] = values
     return out
+
+
+def _mp4_text(value: object) -> str:
+    """Text of an MP4 tag value: a freeform atom is UTF-8 or UTF-16BE bytes."""
+    if isinstance(value, MP4FreeForm):
+        utf16 = value.dataformat == AtomDataType.UTF16
+        return bytes(value).decode("utf-16-be" if utf16 else "utf-8", "replace")
+    if isinstance(value, bytes):
+        return value.decode("utf-8", "replace")
+    return str(value)
 
 
 def copy_mp4_tags(source: str, dest: str) -> int:
