@@ -92,7 +92,7 @@ settings:
 - A name in an entry can be a pattern: `*` matches any run of characters, `?` matches one character and `[...]` matches one character from the set, as in Python's `fnmatch`. Matching is case-sensitive, so `*.wav` does not match `TAKE.WAV`. A name that is exactly equal always matches, so `Live [1999]` still means that folder.
 - `**` matches any number of folders, or none. An entry that starts with `**/` matches at any depth. Any other entry starts at the top of the source, so `.stversions` does not match `Artist/.stversions/`.
 - A sync does not read ignored folders at all. A file moved into an ignored folder counts as deleted, and a file moved out of one counts as new.
-- An ignored lossless file no longer wins over a lossy file with the same name. With `**/*.flac`, `Song.mp3` next to `Song.flac` gets its own outputs.
+- An ignored lossless file no longer wins over a lossy file with the same name. With `**/*.flac`, `Song.mp3` next to `Song.flac` gets its own outputs. An output that `Song.flac` made under the shared name, such as `Song.m4a` in an AAC output, is made again from `Song.mp3`. Remove the entry, and `Song.flac` wins again.
 - Outputs are derived data. The next full sync removes outputs and `.lrc` copies whose only source is ignored, like any other orphan. This also cleans up files that got into the outputs before you added the entry. Remove the entry, and the next sync makes them again.
 - If no audio file in the source is left after the entries apply, the source counts as empty. The safety guard stops the sync, logs a WARNING that names `ignored_files`, and removes nothing.
 - Each full sync logs one INFO line with the number of ignored folders it did not read and the number of other ignored audio files it skipped.

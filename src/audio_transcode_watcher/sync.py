@@ -496,6 +496,20 @@ def _made_from_lossy(output: OutputConfig, out_path: str) -> bool:
     return True
 
 
+def _made_from_ignored(output: OutputConfig, out_path: str, config: Config) -> bool:
+    """True if the manifest says a source that is now ignored made *out_path*.
+
+    This is the encode of an ignored lossless twin: the lossy source of the
+    stem gets the name now, so the file is rebuilt from it.
+    """
+    if not config.ignored_files:
+        return False
+    row = manifest.lookup(output.path, out_path)
+    if not row or not row.get("source") or not manifest.output_matches(row, out_path):
+        return False
+    return is_ignored_file(os.path.join(config.source_path, row["source"]), config)
+
+
 def _tolerant_source_changed(
     output: OutputConfig, out_path: str, source_path: str
 ) -> bool:
@@ -548,6 +562,12 @@ def _process_outputs(source_path: str, config: Config, force: bool) -> bool:
             elif is_lossless(source_path) and _made_from_lossy(output, out_path):
                 logger.info(
                     "Replacing %s: it was made from a lossy source, %s wins",
+                    out_path,
+                    source_path,
+                )
+            elif _made_from_ignored(output, out_path, config):
+                logger.info(
+                    "Replacing %s: its source is in settings.ignored_files, %s wins",
                     out_path,
                     source_path,
                 )

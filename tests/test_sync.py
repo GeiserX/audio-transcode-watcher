@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+import time
 import unicodedata
 from pathlib import Path
 from unittest.mock import patch
@@ -2764,6 +2765,50 @@ class TestIgnoredSourcesAreNotSources:
         _cleanup_orphans(config)
         assert _files(out) == ["Album/x.mp3"]
 
+    def test_encode_of_an_ignored_twin_is_rebuilt_and_comes_back(self, temp_dir):
+        """The kept MP3 replaces the ignored FLAC's encode under the shared name."""
+        source, out, config = _tree_config(temp_dir, [], codec="aac")
+        _touch(source, "Album/x.flac", "Album/x.mp3")
+        flac, mp3 = str(source / "Album/x.flac"), str(source / "Album/x.mp3")
+        encode = "audio_transcode_watcher.sync.atomic_ffmpeg_encode"
+        with patch(encode, side_effect=_fake_encode(b"from flac")):
+            process_source_file(flac, config, check_stable=False)
+        config.ignored_files = ["**/*.flac"]
+        with patch(encode, side_effect=_fake_encode(b"from mp3")):
+            process_source_file(mp3, config, check_stable=False)
+        assert (out / "Album/x.m4a").read_bytes() == b"from mp3"
+        # Remove the entry, and the FLAC wins the name back.
+        config.ignored_files = []
+        with patch(encode, side_effect=_fake_encode(b"from flac again")):
+            process_source_file(flac, config, check_stable=False)
+        assert (out / "Album/x.m4a").read_bytes() == b"from flac again"
+
+    def test_output_of_a_kept_twin_is_not_rebuilt(self, temp_dir):
+        """Only an ignored source's output is replaced, not another kept one's."""
+        source, out, config = _tree_config(temp_dir, ["Other"], codec="aac")
+        _touch(source, "Album/x.mp3", "Album/x.ogg")
+        encode = "audio_transcode_watcher.sync.atomic_ffmpeg_encode"
+        with patch(encode, side_effect=_fake_encode(b"from mp3")):
+            process_source_file(str(source / "Album/x.mp3"), config, check_stable=False)
+        with patch(encode, side_effect=_fake_encode(b"from ogg")):
+            process_source_file(str(source / "Album/x.ogg"), config, check_stable=False)
+        assert (out / "Album/x.m4a").read_bytes() == b"from mp3"
+
+    def test_changed_output_of_an_ignored_twin_is_left_alone(self, temp_dir):
+        """A stale manifest row is not trusted, as for a lossy source."""
+        source, out, config = _tree_config(temp_dir, [], codec="aac")
+        _touch(source, "Album/x.flac", "Album/x.mp3")
+        encode = "audio_transcode_watcher.sync.atomic_ffmpeg_encode"
+        with patch(encode, side_effect=_fake_encode(b"from flac")):
+            process_source_file(
+                str(source / "Album/x.flac"), config, check_stable=False
+            )
+        (out / "Album/x.m4a").write_bytes(b"replaced by hand")
+        config.ignored_files = ["**/*.flac"]
+        with patch(encode, side_effect=_fake_encode(b"from mp3")):
+            process_source_file(str(source / "Album/x.mp3"), config, check_stable=False)
+        assert (out / "Album/x.m4a").read_bytes() == b"replaced by hand"
+
     def test_deleting_the_lossy_twin_removes_its_output(self, temp_dir):
         """An ignored lossless twin no longer keeps the lossy outputs alive."""
         source, out, config = _tree_config(temp_dir, ["Album/x.flac"], codec="mp3")
@@ -2791,6 +2836,20 @@ class TestIgnoredSafetyGuard:
         warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
         assert len(warnings) == 1
         assert "ignored_files" in warnings[0].message
+
+    def test_guard_trips_when_a_file_pattern_ignores_all_audio(self, temp_dir):
+        source, _out, config = _tree_config(temp_dir, ["**/*.flac"])
+        _touch(source, "Album/a.flac", "Live/b.flac", "Album/a.lrc")
+        assert safety_guard_active(config) is True
+
+    def test_guard_notices_when_the_last_kept_file_goes(self, temp_dir, monkeypatch):
+        source, _out, config = _tree_config(temp_dir, ["Old"])
+        _touch(source, "Old/a.flac", "New/b.flac", "New/cover.jpg")
+        assert safety_guard_active(config) is False
+        (source / "New/b.flac").unlink()
+        later = time.monotonic() + sync_mod._UNIGNORED_AUDIO_TTL + 1
+        monkeypatch.setattr(sync_mod.time, "monotonic", lambda: later)
+        assert safety_guard_active(config) is True
 
     def test_guard_stays_off_with_one_kept_file(self, temp_dir):
         source, _out, config = _tree_config(temp_dir, ["Old"])
