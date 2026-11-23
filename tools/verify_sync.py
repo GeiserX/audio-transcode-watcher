@@ -161,7 +161,8 @@ def get_file_info(filepath: str) -> tuple[float | None, dict[str, str]]:
             if "duration" in fmt:
                 try:
                     duration = float(fmt["duration"])
-                except ValueError, TypeError:
+                # Parentheses keep the script runnable on Python 3.10 to 3.13.
+                except (ValueError, TypeError):  # fmt: skip
                     pass
 
             # Get metadata
