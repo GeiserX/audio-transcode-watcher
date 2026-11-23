@@ -20,7 +20,8 @@ Keep one library in several formats: lossless for the archive, lossy for phones 
 - Watches the source folder and reacts to new, changed, renamed and deleted files.
 - Writes any number of outputs in one pass, in ALAC, AAC, MP3, Opus, FLAC or WAV at the bitrate you pick.
 - Mirrors the Artist/Album folder tree in every output.
-- Copies lossy sources (MP3, M4A, Ogg, Opus, WMA) unchanged instead of inflating them into a lossless output.
+- Starts from any format: FLAC, ALAC, WAV, AIFF and the other lossless formats, or lossy files. `source.formats` picks which ones to process.
+- Copies lossy sources (MP3, AAC, Ogg, Opus, WMA) unchanged instead of inflating them into a lossless output.
 - Fails loudly on a source that does not decode cleanly, and writes no output for it.
 - Keeps ReplayGain, MusicBrainz ids, ISRC, label and sort tags in ALAC and AAC copies.
 - Optionally measures every file and writes ReplayGain 2.0 track gain into the source and every output, so the whole library plays at one volume.

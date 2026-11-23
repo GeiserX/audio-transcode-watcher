@@ -8,6 +8,8 @@ Configuration is provided via a YAML file. Set the `CONFIG_FILE` environment var
 # Source folder containing original audio files
 source:
   path: /music/flac
+  # Source formats to process (default: all of them). See below.
+  # formats: [flac, alac, wav]
 
 # Output destinations -- define as many as you need
 outputs:
@@ -143,18 +145,49 @@ Writing the tags changes the source file's size and modification time. The watch
 
 `whisper_fallback` and `whisper_model` were removed in 0.6.0 along with the Whisper lyrics fallback. A config that still sets them loads, and the first load logs one warning that they are ignored.
 
-## Source formats
+## Start from any format
 
-| Kind     | Extensions                                                         |
-|----------|--------------------------------------------------------------------|
-| Lossless | `.flac` `.alac` `.wav` `.aiff` `.aif` `.ape` `.wv` `.tta` `.tak`   |
-| Lossy    | `.mp3` `.aac` `.m4a` `.ogg` `.opus` `.wma`                         |
+The source folder can hold any of these formats, mixed. `source.formats` lists the ones to process. Leave it out and every format is processed.
 
-A lossless source is encoded to every output.
+| Name      | Kind     | Extensions       |
+|-----------|----------|------------------|
+| `flac`    | Lossless | `.flac`          |
+| `alac`    | Lossless | `.m4a` `.alac`   |
+| `wav`     | Lossless | `.wav`           |
+| `aiff`    | Lossless | `.aiff` `.aif`   |
+| `ape`     | Lossless | `.ape`           |
+| `wavpack` | Lossless | `.wv`            |
+| `tta`     | Lossless | `.tta`           |
+| `tak`     | Lossless | `.tak`           |
+| `mp3`     | Lossy    | `.mp3`           |
+| `aac`     | Lossy    | `.m4a` `.aac`    |
+| `vorbis`  | Lossy    | `.ogg`           |
+| `opus`    | Lossy    | `.opus`          |
+| `wma`     | Lossy    | `.wma`           |
 
-A lossy source is never encoded into a lossless output, because that only makes a big file that looks lossless. It is copied there unchanged, with its own extension, so an ALAC folder can hold `.m4a` encodes next to `.mp3` or `.ogg` copies. Into a lossy output it is copied unchanged when it already has that output's codec (`.mp3` into `mp3`, `.m4a` or `.aac` into `aac`, `.opus` into `opus`) and transcoded otherwise. Copies keep their tags and cover as they are.
+An `.m4a` file holds either ALAC or AAC. The watcher asks `ffprobe` which one. It asks once per file, and again only when the file's size or modification time changes. If `ffprobe` cannot read the file, the watcher logs one WARNING and treats the file as AAC.
 
-When a lossless and a lossy file share a name in the source folder, the lossless one is used for every output. If the lossy file came first and was already copied or transcoded, that file is replaced by an encode of the lossless one as soon as it is processed. To tell those files apart, each output folder keeps a hidden `.atw-manifest.json` recording which source made each file and whether it was an encode, a copy or a transcode. Deleting it is safe: files it does not know about are treated as they were before 0.6.1.
+For example, to use an ALAC library as the source and leave its few AAC files alone:
+
+```yaml
+source:
+  path: /music/apple-lossless
+  formats: [alac]
+```
+
+- A file whose format is not in the list is treated like a path in [`ignored_files`](#ignored-paths). It gets no encode, no copy, no ReplayGain tag, no lyrics and no sidecar copy, and file events for it do nothing. The next full sync removes outputs whose only source it was, like any other orphan.
+- A lossless file left out of the list no longer wins over a lossy file with the same name. With `formats: [mp3]`, `Song.mp3` next to `Song.flac` gets its own outputs.
+- If no file in a listed format is left, the source counts as empty. The safety guard stops the sync, logs a WARNING that names `source.formats`, and removes nothing.
+- Each full sync logs one INFO line with the number of audio files it skipped. When `source.formats` leaves something out, the startup log shows the list.
+- Names are not case-sensitive. An unknown name, an empty list or a value that is not a list stops the watcher at startup with an error that lists the valid names.
+
+### Lossless and lossy sources
+
+A lossless source is encoded to every output. That includes an ALAC source: it is encoded into an AAC, MP3 or Opus output, and into a FLAC or WAV output. Into an ALAC output it is encoded too, the same way a FLAC source is encoded into a FLAC output. The audio comes out bit for bit the same, and the encode checks that the source decodes cleanly. The ReplayGain, MusicBrainz and other tags in the source's M4A atoms are carried into ALAC and AAC outputs (see [Tags in ALAC and AAC outputs](#tags-in-alac-and-aac-outputs)).
+
+A lossy source is never encoded into a lossless output, because that only makes a big file that looks lossless. It is copied there unchanged, with its own extension, so an ALAC folder can hold `.m4a` encodes next to `.mp3` or `.ogg` copies. Into a lossy output it is copied unchanged when it already has that output's codec (`.mp3` into `mp3`, an AAC `.m4a` or an `.aac` into `aac`, `.opus` into `opus`) and transcoded otherwise. Copies keep their tags and cover as they are.
+
+When a lossless and a lossy file share a name in the source folder, the lossless one is used for every output. If the lossy file came first and was already copied or transcoded, that file is replaced by an encode of the lossless one as soon as it is processed. When an ALAC `.m4a` shares a name with a FLAC or another lossless file that has its own extension, that other file is used, because the ALAC file is usually a copy of it. To tell those files apart, each output folder keeps a hidden `.atw-manifest.json` recording which source made each file and whether it was an encode, a copy or a transcode. Deleting it is safe: files it does not know about are treated as they were before 0.6.1.
 
 ## Portable limits (channels and sample rate)
 
@@ -181,7 +214,7 @@ docker exec audio_transcoder find /music/aac -name '*.m4a' -exec sh -c 'ffprobe 
 
 ## Tags in ALAC and AAC outputs
 
-FFmpeg writes the standard MP4 atoms (title, artist, album and so on). After an ALAC or AAC encode, the tags FFmpeg drops are copied from the source under the names MusicBrainz Picard uses, so Picard, TagLib (Navidrome, Jellyfin), foobar2000 and iTunes all read them:
+FFmpeg writes the standard MP4 atoms (title, artist, album and so on). After an ALAC or AAC encode, the tags FFmpeg drops are copied from the source under the names MusicBrainz Picard uses, also when the source is an M4A file that already has them, so Picard, TagLib (Navidrome, Jellyfin), foobar2000 and iTunes all read them:
 
 | Source tag                                   | MP4 atom                                              |
 |----------------------------------------------|-------------------------------------------------------|

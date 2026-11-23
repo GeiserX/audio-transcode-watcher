@@ -9,7 +9,7 @@ from collections.abc import Callable
 
 import mutagen
 from mutagen.apev2 import APETextValue
-from mutagen.mp4 import MP4, MP4FreeForm
+from mutagen.mp4 import MP4, MP4FreeForm, MP4Tags
 
 from .config import OutputConfig
 from .utils import nfc_path
@@ -397,12 +397,25 @@ def _source_tag_values(source: str) -> dict[str, list[str]]:
 
     Vorbis comments (FLAC, Ogg, Opus) and APEv2 (APE, WavPack, TAK) store
     them under the same names; ID3 (WAV, AIFF, MP3) uses TXXX and a few
-    standard frames.
+    standard frames; an M4A source (ALAC or AAC) already has the atoms,
+    which FFmpeg drops on the encode all the same.
     """
     audio = mutagen.File(source)
     if audio is None or audio.tags is None:
         return {}
     tags = audio.tags
+
+    if isinstance(tags, MP4Tags):
+        found: dict[str, list[str]] = {}
+        for name, atom in MP4_TAG_ATOMS.items():
+            values = [
+                bytes(v).decode("utf-8", "replace") if isinstance(v, bytes) else str(v)
+                for v in tags.get(atom, [])
+            ]
+            values = [v for v in values if v.strip()]
+            if values:
+                found[name] = values
+        return found
 
     # Name -> values, with keys upper-cased for case-insensitive lookup.
     plain: dict[str, list[str]] = {}
