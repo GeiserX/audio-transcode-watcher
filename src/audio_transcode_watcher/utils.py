@@ -6,6 +6,9 @@ import logging
 import os
 import time
 import unicodedata
+from collections.abc import Callable
+from fnmatch import fnmatchcase
+from functools import lru_cache
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -213,15 +216,99 @@ def get_rel_stem(filepath: str, root: str) -> str:
     return nfc_path(os.path.join(rel_dir, stem))
 
 
-def walk_audio_files(directory: str) -> list[str]:
-    """Recursively collect all audio files under *directory*."""
+def ignore_entry_parts(entry: str) -> tuple[str, ...]:
+    """Split an ignored_files entry into NFC path parts.
+
+    Leading and trailing slashes and ``.`` parts are dropped, so
+    ``.stversions``, ``/.stversions/`` and ``./.stversions`` are one entry.
+    """
+    return Path(nfc(entry).strip("/")).parts
+
+
+@lru_cache(maxsize=32)
+def _ignore_rules(entries: tuple[str, ...]) -> tuple[tuple[str, ...], ...]:
+    return tuple(p for p in map(ignore_entry_parts, entries) if p)
+
+
+def _part_matches(name: str, pattern: str) -> bool:
+    # An exact name always matches, so an entry such as "Live [1999]" that
+    # worked before patterns existed still names that folder.
+    return name == pattern or fnmatchcase(name, pattern)
+
+
+def _prefix_matches(pattern: tuple[str, ...], parts: tuple[str, ...]) -> bool:
+    """True if *pattern* matches the first parts of *parts*, part by part.
+
+    ``**`` matches any number of parts, none included. Matching a prefix
+    means an entry that names a folder covers everything inside it.
+    """
+    if not pattern:
+        return True
+    if pattern[0] == "**":
+        rest = pattern[1:]
+        return any(_prefix_matches(rest, parts[i:]) for i in range(len(parts) + 1))
+    if not parts or not _part_matches(parts[0], pattern[0]):
+        return False
+    return _prefix_matches(pattern[1:], parts[1:])
+
+
+def matches_ignored(rel_path: str, entries: list[str]) -> bool:
+    """True if *rel_path*, relative to the source folder, matches an entry.
+
+    Each entry is a path whose parts are compared one by one with fnmatch
+    rules (``*``, ``?``, ``[...]``, case-sensitive). ``**`` matches any
+    number of folders, so ``**/.stversions`` matches that folder at any
+    depth; any other entry is anchored at the source folder.
+    """
+    if not entries:
+        return False
+    parts = Path(nfc_path(rel_path)).parts
+    if not parts or parts[0] == os.pardir:
+        return False
+    return any(_prefix_matches(p, parts) for p in _ignore_rules(tuple(entries)))
+
+
+def walk_audio_files(
+    directory: str,
+    ignored: Callable[[str], bool] | None = None,
+    counts: dict[str, int] | None = None,
+) -> list[str]:
+    """Recursively collect all audio files under *directory*.
+
+    With *ignored*, a folder for which it returns True is not entered and a
+    file for which it returns True is left out. *counts*, if given, gets
+    the number of skipped ``folders`` and audio ``files``.
+    """
     files: list[str] = []
-    for dirpath, _dirnames, filenames in os.walk(directory):
+    for dirpath, dirnames, filenames in os.walk(directory):
+        if ignored is not None:
+            kept = [d for d in dirnames if not ignored(os.path.join(dirpath, d))]
+            if counts is not None:
+                counts["folders"] = counts.get("folders", 0) + len(dirnames) - len(kept)
+            dirnames[:] = kept
         for fname in filenames:
             full = os.path.join(dirpath, fname)
             if has_audio_extension(full):
+                if ignored is not None and ignored(full):
+                    if counts is not None:
+                        counts["files"] = counts.get("files", 0) + 1
+                    continue
                 files.append(full)
     return files
+
+
+def has_unignored_audio(directory: str, ignored: Callable[[str], bool]) -> bool:
+    """True if *directory* holds at least one audio file *ignored* keeps.
+
+    Stops at the first one, so it is cheap for a normal library.
+    """
+    for dirpath, dirnames, filenames in os.walk(directory):
+        dirnames[:] = [d for d in dirnames if not ignored(os.path.join(dirpath, d))]
+        for fname in filenames:
+            full = os.path.join(dirpath, fname)
+            if has_audio_extension(full) and not ignored(full):
+                return True
+    return False
 
 
 def remove_empty_dirs(root: str) -> None:

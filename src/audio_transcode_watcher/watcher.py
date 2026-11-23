@@ -14,9 +14,11 @@ from .config import Config
 from .sync import (
     delete_outputs,
     delete_sidecars,
+    is_ignored_file,
     process_source_file,
     safety_guard_active,
     sync_sidecars,
+    walk_sources,
 )
 from .utils import (
     has_audio_extension,
@@ -24,7 +26,6 @@ from .utils import (
     is_audio_file,
     nfc_path,
     remove_empty_dirs,
-    walk_audio_files,
 )
 
 
@@ -59,6 +60,10 @@ class AudioSyncHandler(FileSystemEventHandler):
             ts = self._processed_at.get(key, 0.0)
         return (time.monotonic() - ts) < self._EVENT_COOLDOWN
 
+    def _ignored(self, path: str) -> bool:
+        """True if *path* matches settings.ignored_files: the event is not ours."""
+        return is_ignored_file(path, self.config)
+
     def _process_later(self, path: str, force: bool = False) -> None:
         """Process a file after a brief delay to coalesce rapid events."""
         if not is_audio_file(path):
@@ -75,7 +80,7 @@ class AudioSyncHandler(FileSystemEventHandler):
 
     def on_created(self, event) -> None:
         """Handle file creation (audio or sidecar)."""
-        if event.is_directory:
+        if event.is_directory or self._ignored(event.src_path):
             return
 
         if has_sidecar_extension(event.src_path):
@@ -85,7 +90,7 @@ class AudioSyncHandler(FileSystemEventHandler):
 
     def on_modified(self, event) -> None:
         """Handle file modification (audio or sidecar)."""
-        if event.is_directory:
+        if event.is_directory or self._ignored(event.src_path):
             return
 
         if safety_guard_active(self.config):
@@ -125,35 +130,45 @@ class AudioSyncHandler(FileSystemEventHandler):
 
     def _reprocess_directory(self, directory: str) -> None:
         """Re-process all audio files in a directory in a background thread."""
-        for f in walk_audio_files(directory):
+        for f in walk_sources(self.config, root=directory):
             self._process_later(f, force=True)
 
     def on_moved(self, event) -> None:
-        """Handle file or directory rename/move."""
+        """Handle file or directory rename/move.
+
+        An ignored path counts as outside the source folder: a move into it
+        is a delete, a move out of it is a create.
+        """
+        src_gone = not self._ignored(event.src_path)
+        dest_new = not self._ignored(event.dest_path)
         if event.is_directory:
-            self._handle_directory_delete(event.src_path)
-            threading.Thread(
-                target=self._reprocess_directory,
-                args=(event.dest_path,),
-                daemon=True,
-            ).start()
+            if src_gone:
+                self._handle_directory_delete(event.src_path)
+            if dest_new:
+                threading.Thread(
+                    target=self._reprocess_directory,
+                    args=(event.dest_path,),
+                    daemon=True,
+                ).start()
             return
 
         if has_sidecar_extension(event.src_path) or has_sidecar_extension(
             event.dest_path
         ):
-            if has_sidecar_extension(event.src_path):
+            if src_gone and has_sidecar_extension(event.src_path):
                 delete_sidecars(event.src_path, self.config)
-            if has_sidecar_extension(event.dest_path):
+            if dest_new and has_sidecar_extension(event.dest_path):
                 sync_sidecars(event.dest_path, self.config)
         else:
-            if has_audio_extension(event.src_path):
+            if src_gone and has_audio_extension(event.src_path):
                 delete_outputs(event.src_path, self.config)
-            if is_audio_file(event.dest_path):
+            if dest_new and is_audio_file(event.dest_path):
                 self._process_later(event.dest_path, force=True)
 
     def on_deleted(self, event) -> None:
         """Handle file or directory deletion."""
+        if self._ignored(event.src_path):
+            return
         if event.is_directory:
             self._handle_directory_delete(event.src_path)
             return

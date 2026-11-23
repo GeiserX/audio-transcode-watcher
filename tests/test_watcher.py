@@ -417,3 +417,84 @@ class TestStartWatcher:
         assert observer.is_alive()
         observer.stop()
         observer.join(timeout=5)
+
+
+class TestIgnoredEvents:
+    """Events under ignored paths do nothing; moves across the line count."""
+
+    @pytest.fixture
+    def ign(self, tmp_path):
+        src = tmp_path / "source"
+        (src / "Album").mkdir(parents=True)
+        out = tmp_path / "output"
+        out.mkdir()
+        config = Config(
+            source_path=str(src),
+            outputs=[OutputConfig(name="mp3", codec="mp3", path=str(out))],
+            ignored_files=["**/.stversions"],
+        )
+        return AudioSyncHandler(config), src
+
+    @patch("audio_transcode_watcher.watcher.AudioSyncHandler._process_later")
+    @patch("audio_transcode_watcher.watcher.delete_outputs")
+    def test_modified_and_deleted_do_nothing(self, mock_del, mock_proc, ign):
+        handler, src = ign
+        path = str(src / "Album" / ".stversions" / "song~1.flac")
+        with patch(
+            "audio_transcode_watcher.watcher.safety_guard_active", return_value=False
+        ):
+            handler.on_modified(_event(path))
+            handler.on_deleted(_event(path))
+            handler.on_deleted(_event(str(src / ".stversions"), is_directory=True))
+        mock_del.assert_not_called()
+        mock_proc.assert_not_called()
+
+    @patch("audio_transcode_watcher.watcher.is_audio_file", return_value=True)
+    @patch("audio_transcode_watcher.watcher.AudioSyncHandler._process_later")
+    @patch("audio_transcode_watcher.watcher.delete_outputs")
+    def test_move_into_ignored_folder_is_a_delete(
+        self, mock_del, mock_proc, _audio, ign
+    ):
+        handler, src = ign
+        old = str(src / "Album" / "song.flac")
+        new = str(src / "Album" / ".stversions" / "song~1.flac")
+        handler.on_moved(_event(old, dest_path=new))
+        mock_del.assert_called_once_with(old, handler.config)
+        mock_proc.assert_not_called()
+
+    @patch("audio_transcode_watcher.watcher.is_audio_file", return_value=True)
+    @patch("audio_transcode_watcher.watcher.AudioSyncHandler._process_later")
+    @patch("audio_transcode_watcher.watcher.delete_outputs")
+    def test_move_out_of_ignored_folder_is_a_create(
+        self, mock_del, mock_proc, _audio, ign
+    ):
+        handler, src = ign
+        old = str(src / "Album" / ".stversions" / "song~1.flac")
+        new = str(src / "Album" / "song.flac")
+        handler.on_moved(_event(old, dest_path=new))
+        mock_del.assert_not_called()
+        mock_proc.assert_called_once_with(new, force=True)
+
+    @patch("audio_transcode_watcher.watcher.threading.Thread")
+    @patch("audio_transcode_watcher.watcher.AudioSyncHandler._handle_directory_delete")
+    def test_folder_moves_across_the_line(self, mock_dir_del, mock_thread, ign):
+        handler, src = ign
+        album = str(src / "Album")
+        versions = str(src / ".stversions" / "Album")
+        handler.on_moved(_event(album, is_directory=True, dest_path=versions))
+        mock_dir_del.assert_called_once_with(album)
+        mock_thread.assert_not_called()
+
+        mock_dir_del.reset_mock()
+        handler.on_moved(_event(versions, is_directory=True, dest_path=album))
+        mock_dir_del.assert_not_called()
+        mock_thread.assert_called_once()
+
+    @patch("audio_transcode_watcher.watcher.AudioSyncHandler._process_later")
+    def test_reprocess_directory_skips_ignored(self, mock_proc, ign):
+        handler, src = ign
+        for rel in ["Album/song.flac", "Album/.stversions/song~1.flac"]:
+            (src / rel).parent.mkdir(parents=True, exist_ok=True)
+            (src / rel).touch()
+        handler._reprocess_directory(str(src / "Album"))
+        mock_proc.assert_called_once_with(str(src / "Album" / "song.flac"), force=True)

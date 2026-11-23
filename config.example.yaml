@@ -65,10 +65,13 @@ settings:
   # Fetch synced .lrc lyrics online; nothing is written when none are found
   fetch_lyrics: true
 
-  # Paths inside the source folder that get no output (default: none),
-  # e.g. Syncthing's version folder. Outputs made earlier are not removed.
+  # Paths inside the source folder to treat as absent (default: none), e.g.
+  # a sync tool's version folder. Each folder or file name can be a pattern
+  # (* ? [..]); a leading **/ matches at any depth. Outputs whose only source
+  # is ignored are removed as orphans, and come back if the entry goes.
   # ignored_files:
-  #   - ".stversions/"
+  #   - "**/.stversions"
+  #   - "**/*.wav"
 
   # Seconds between periodic full syncs (default: 300)
   sync_interval_seconds: 300

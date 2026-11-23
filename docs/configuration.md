@@ -61,9 +61,10 @@ settings:
   # Auto-fetch synced .lrc lyrics (default: true)
   fetch_lyrics: true
 
-  # Paths inside the source folder to skip (default: none). See below.
+  # Paths inside the source folder to skip, with * ? [..] and ** patterns
+  # (default: none). See below.
   ignored_files:
-    - ".stversions/"
+    - "**/.stversions"
 
   # Seconds between periodic full syncs (default: 300)
   sync_interval_seconds: 300
@@ -75,12 +76,27 @@ settings:
 
 ### Ignored paths
 
-`ignored_files` lists folders or files that get no output at all: no encode, no copy, no ReplayGain tag, no lyrics and no sidecar copy. A typical use is Syncthing's `.stversions/` folder, which holds old versions of files inside the synced library.
+`ignored_files` lists folders and files that the watcher treats as if they were not in the source folder. They get no encode, no copy, no ReplayGain tag, no lyrics and no sidecar copy. One use is the version folder of a sync tool, such as Syncthing's `.stversions/`, which keeps old copies of files inside the library.
 
-- Each entry is a path relative to `source.path`, for example `.stversions/` or `Artist/Album/track.flac`.
-- An entry matches whole folder or file names. `.stversions` and `.stversions/` both mean that folder and everything in it, but not `.stversions-old/` and not `Artist/.stversions/`.
-- The value must be a list. A plain string, an empty entry or `/` stops the watcher at startup with an error.
-- Outputs made before a path was listed are not removed. Delete them from the output folders by hand.
+```yaml
+settings:
+  ignored_files:
+    - ".stversions/"          # this folder, at the top of the source
+    - "**/.stversions"        # a folder with this name at any depth
+    - "**/*.wav"              # every WAV file
+    - "*/Live"                # a Live folder one level down, like Artist/Live
+    - "Artist/Album/03.flac"  # one file
+```
+
+- Each entry is a path relative to `source.path`. It is compared with each path one folder or file name at a time, and it matches whole names: `.stversions` means that folder and everything in it, but not `.stversions-old/`.
+- A name in an entry can be a pattern: `*` matches any run of characters, `?` matches one character and `[...]` matches one character from the set, as in Python's `fnmatch`. Matching is case-sensitive, so `*.wav` does not match `TAKE.WAV`. A name that is exactly equal always matches, so `Live [1999]` still means that folder.
+- `**` matches any number of folders, or none. An entry that starts with `**/` matches at any depth. Any other entry starts at the top of the source, so `.stversions` does not match `Artist/.stversions/`.
+- A sync does not read ignored folders at all. A file moved into an ignored folder counts as deleted, and a file moved out of one counts as new.
+- An ignored lossless file no longer wins over a lossy file with the same name. With `**/*.flac`, `Song.mp3` next to `Song.flac` gets its own outputs. An output that `Song.flac` made under the shared name, such as `Song.m4a` in an AAC output, is made again from `Song.mp3`. Remove the entry, and `Song.flac` wins again.
+- Outputs are derived data. The next full sync removes outputs and `.lrc` copies whose only source is ignored, like any other orphan. This also cleans up files that got into the outputs before you added the entry. Remove the entry, and the next sync makes them again.
+- If no audio file in the source is left after the entries apply, the source counts as empty. The safety guard stops the sync, logs a WARNING that names `ignored_files`, and removes nothing.
+- Each full sync logs one INFO line with the number of ignored folders it did not read and the number of other ignored audio files it skipped.
+- The value must be a list. A plain string, an empty entry, `/`, `**` or an entry with a `..` part stops the watcher at startup with an error.
 
 ### Damaged sources
 
