@@ -65,6 +65,11 @@ settings:
   # Fetch synced .lrc lyrics online; nothing is written when none are found
   fetch_lyrics: true
 
+  # Paths inside the source folder that get no output (default: none),
+  # e.g. Syncthing's version folder. Outputs made earlier are not removed.
+  # ignored_files:
+  #   - ".stversions/"
+
   # Seconds between periodic full syncs (default: 300)
   sync_interval_seconds: 300
 

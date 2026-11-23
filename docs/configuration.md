@@ -61,9 +61,9 @@ settings:
   # Auto-fetch synced .lrc lyrics (default: true)
   fetch_lyrics: true
 
-  # Specify paths to skip sync for (default: empty)
+  # Paths inside the source folder to skip (default: none). See below.
   ignored_files:
-    - ".deleted/"
+    - ".stversions/"
 
   # Seconds between periodic full syncs (default: 300)
   sync_interval_seconds: 300
@@ -72,6 +72,15 @@ settings:
   # (default: skip). An output can set its own corrupt_source.
   corrupt_source: skip
 ```
+
+### Ignored paths
+
+`ignored_files` lists folders or files that get no output at all: no encode, no copy, no ReplayGain tag, no lyrics and no sidecar copy. A typical use is Syncthing's `.stversions/` folder, which holds old versions of files inside the synced library.
+
+- Each entry is a path relative to `source.path`, for example `.stversions/` or `Artist/Album/track.flac`.
+- An entry matches whole folder or file names. `.stversions` and `.stversions/` both mean that folder and everything in it, but not `.stversions-old/` and not `Artist/.stversions/`.
+- The value must be a list. A plain string, an empty entry or `/` stops the watcher at startup with an error.
+- Outputs made before a path was listed are not removed. Delete them from the output folders by hand.
 
 ### Damaged sources
 
