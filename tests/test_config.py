@@ -152,6 +152,7 @@ class TestConfig:
             "settings": {
                 "force_reencode": True,
                 "stability_timeout": 30.0,
+                "ignored_files": ["test-dir/"]
             },
         }
         config = Config.from_dict(data)
@@ -159,6 +160,7 @@ class TestConfig:
         assert len(config.outputs) == 1
         assert config.force_reencode is True
         assert config.stability_timeout == 30.0
+        assert config.ignored_files == ["test-dir/"]
 
     def test_from_yaml_file(self, yaml_config_file):
         """Test loading Config from a YAML file."""
