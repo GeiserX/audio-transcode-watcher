@@ -133,7 +133,8 @@ def is_ignored_file(file_path: str, config: Config) -> bool:
     for pattern in config.ignored_files:
         parts = Path(nfc(pattern).strip("/")).parts
         if parts and rel_parts[: len(parts)] == parts:
-            logger.info(
+            # Debug, not info: a periodic sync would log every ignored file.
+            logger.debug(
                 "Skipping file: %s (ignored by ignored_files config)",
                 file_path,
             )
@@ -159,13 +160,14 @@ def process_source_file(
     """
     source_path = nfc_path(source_path)
 
+    # First: a string check, cheaper than the stat and the folder scans below.
+    if is_ignored_file(source_path, config):
+        return
+
     if not is_audio_file(source_path):
         return
 
     if safety_guard_active(config):
-        return
-
-    if is_ignored_file(source_path, config):
         return
 
     # Wait for file to stabilize if needed

@@ -1,6 +1,7 @@
 """Tests for sync module."""
 
 import json
+import logging
 import os
 import unicodedata
 from pathlib import Path
@@ -954,6 +955,67 @@ class TestProcessSourceFileLyrics:
 
         process_source_file(str(flac), config, force=True, check_stable=False)
         _sync.assert_called_once()
+
+
+class TestProcessSourceFileIgnored:
+    """Tests for ignored_files in process_source_file."""
+
+    @staticmethod
+    def _tree(temp_dir):
+        source = Path(temp_dir) / "source"
+        versions = source / ".stversions" / "Album"
+        versions.mkdir(parents=True)
+        ignored = versions / "Song~20240101-120000.flac"
+        ignored.touch()
+        out = Path(temp_dir) / "output"
+        out.mkdir()
+        config = Config(
+            source_path=str(source),
+            outputs=[OutputConfig(name="mp3", codec="mp3", path=str(out))],
+            ignored_files=[".stversions/"],
+            replaygain=True,
+            fetch_lyrics=True,
+        )
+        return config, ignored, out
+
+    @patch("audio_transcode_watcher.sync.sync_sidecars")
+    @patch("audio_transcode_watcher.sync.fetch_lyrics_for_file")
+    @patch("audio_transcode_watcher.sync._tag_source")
+    @patch("audio_transcode_watcher.sync.atomic_ffmpeg_encode", return_value=0)
+    @patch("audio_transcode_watcher.sync.safety_guard_active", return_value=False)
+    def test_ignored_file_gets_nothing(
+        self, _guard, mock_encode, mock_tag, mock_lyrics, mock_sidecars, temp_dir
+    ):
+        """No encode, no ReplayGain tag, no lyrics and no sidecars."""
+        config, ignored, out = self._tree(temp_dir)
+
+        process_source_file(str(ignored), config, force=True, check_stable=False)
+
+        mock_encode.assert_not_called()
+        mock_tag.assert_not_called()
+        mock_lyrics.assert_not_called()
+        mock_sidecars.assert_not_called()
+        assert list(out.iterdir()) == []
+
+    @patch("audio_transcode_watcher.sync.safety_guard_active", return_value=False)
+    def test_checked_before_the_folder_scans(self, mock_guard, temp_dir):
+        """An ignored file never pays for the safety guard's folder scans."""
+        config, ignored, _ = self._tree(temp_dir)
+
+        process_source_file(str(ignored), config, check_stable=False)
+
+        mock_guard.assert_not_called()
+
+    @patch("audio_transcode_watcher.sync.safety_guard_active", return_value=False)
+    def test_skip_is_logged_at_debug(self, _guard, temp_dir, caplog):
+        """A periodic sync must not log one INFO line per ignored file."""
+        config, ignored, _ = self._tree(temp_dir)
+
+        with caplog.at_level(logging.DEBUG, logger="audio_transcode_watcher.sync"):
+            process_source_file(str(ignored), config, check_stable=False)
+
+        skips = [r for r in caplog.records if "ignored by ignored_files" in r.message]
+        assert [r.levelno for r in skips] == [logging.DEBUG]
 
 
 class TestProcessSourceFileConcurrency:
