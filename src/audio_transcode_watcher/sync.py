@@ -112,12 +112,15 @@ def safety_guard_active(config: Config) -> bool:
     return False
 
 def is_ignored_file(file_path: str, config: Config) -> bool:
+    """
+    Check if config.ignored_files paths apply to the current file we're trying to process
+    """
     if not config.ignored_files:
         return False
 
-    # Find file within source dir + string leading /'s
+    # Find file within source dir + strip leading /'s
     # IE my/files/nested/file.mp3 becomes nested/file.mp3, if source_path is my/files
-    rel = file_path[len(config.source_path):].lstrip("/")
+    rel = file_path.replace(config.source_path, '').lstrip("/")
 
     for pattern in config.ignored_files:
         if rel.startswith(pattern.lstrip("/")):
