@@ -152,7 +152,7 @@ class TestConfig:
             "settings": {
                 "force_reencode": True,
                 "stability_timeout": 30.0,
-                "ignored_files": ["test-dir/"]
+                "ignored_files": ["test-dir/"],
             },
         }
         config = Config.from_dict(data)

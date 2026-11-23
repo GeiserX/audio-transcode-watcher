@@ -18,10 +18,10 @@ from audio_transcode_watcher.sync import (
     delete_outputs,
     delete_sidecars,
     initial_sync,
+    is_ignored_file,
     process_source_file,
     purge_all_outputs,
     safety_guard_active,
-    is_ignored_file,
     sync_sidecars,
 )
 
@@ -122,6 +122,7 @@ class TestSafetyGuard:
         # Source has only hidden file, should be considered empty
         assert safety_guard_active(config) is True
 
+
 class TestIsIgnoredFile:
     """Tests for is_ignored_file function."""
 
@@ -145,10 +146,7 @@ class TestIsIgnoredFile:
         source = Path(temp_dir) / "source"
         source.mkdir()
 
-        for rel in [
-            "test/folder/ignore/file.flac",
-            "test/folder/keep.flac"
-        ]:
+        for rel in ["test/folder/ignore/file.flac", "test/folder/keep.flac"]:
             path = source / rel
             path.parent.mkdir(parents=True, exist_ok=True)
             path.touch()
@@ -158,11 +156,19 @@ class TestIsIgnoredFile:
         config = Config(
             source_path=str(source),
             outputs=[OutputConfig(name="out", codec="alac", path=str(output))],
-            ignored_files=["test/folder/ignore"]
+            ignored_files=["test/folder/ignore"],
         )
 
-        assert is_ignored_file(str(source / "test" / "folder" / "ignore" / "file.flac"), config) is True
-        assert is_ignored_file(str(source / "test" / "folder" / "keep.flac"), config) is False
+        assert (
+            is_ignored_file(
+                str(source / "test" / "folder" / "ignore" / "file.flac"), config
+            )
+            is True
+        )
+        assert (
+            is_ignored_file(str(source / "test" / "folder" / "keep.flac"), config)
+            is False
+        )
 
     def test_when_ignored_files_nested(self, temp_dir):
         """Files are ignored even if they are nested."""
@@ -170,10 +176,10 @@ class TestIsIgnoredFile:
         source.mkdir()
 
         for rel in [
-            "ignore/file.flac", # To ignore
-            "ignore/test/file.flac" # To ignore
-            "keep/ignore/file.flac", # To keep
-            "ignore-not-really/file.flac", # To keep
+            "ignore/file.flac",  # To ignore
+            "ignore/test/file.flac",  # To ignore
+            "keep/ignore/file.flac",  # To keep
+            "ignore-not-really/file.flac",  # To keep
         ]:
             path = source / rel
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -184,13 +190,22 @@ class TestIsIgnoredFile:
         config = Config(
             source_path=str(source),
             outputs=[OutputConfig(name="out", codec="alac", path=str(output))],
-            ignored_files=["ignore/"]
+            ignored_files=["ignore/"],
         )
 
         assert is_ignored_file(str(source / "ignore" / "file.flac"), config) is True
-        assert is_ignored_file(str(source / "ignore" / "test" / "file.flac"), config) is True
-        assert is_ignored_file(str(source / "keep" / "ignore" / "file.flac"), config) is False
-        assert is_ignored_file(str(source / "ignore-not-really" / "file.flac"), config) is False
+        assert (
+            is_ignored_file(str(source / "ignore" / "test" / "file.flac"), config)
+            is True
+        )
+        assert (
+            is_ignored_file(str(source / "keep" / "ignore" / "file.flac"), config)
+            is False
+        )
+        assert (
+            is_ignored_file(str(source / "ignore-not-really" / "file.flac"), config)
+            is False
+        )
 
     def test_when_ignored_files_found(self, temp_dir):
         """Files are ignored if they are matched at the top level."""
@@ -203,10 +218,11 @@ class TestIsIgnoredFile:
         config = Config(
             source_path=str(source),
             outputs=[OutputConfig(name="out", codec="alac", path=str(output))],
-            ignored_files=["file"]
+            ignored_files=["file"],
         )
 
         assert is_ignored_file(str(source / "file.flac"), config) is True
+
 
 class TestProcessSourceFile:
     """Tests for process_source_file function."""
