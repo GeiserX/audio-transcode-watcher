@@ -603,14 +603,15 @@ def sync_sidecars(source_path: str, config: Config) -> None:
     Directory structure from the source root is preserved.
     """
     source_path = nfc_path(source_path)
-    # The watcher calls this directly for .lrc events, not via process_source_file.
-    if is_ignored_file(source_path, config):
-        return
     stem = nfc(Path(source_path).stem)
     source_dir = os.path.dirname(source_path)
 
     for ext in SIDECAR_EXTENSIONS:
         sidecar_src = nfc_path(os.path.join(source_dir, f"{stem}{ext}"))
+        # Checked per sidecar: the watcher calls this directly for .lrc events,
+        # and an entry can name the sidecar itself (Album/song.lrc).
+        if is_ignored_file(sidecar_src, config):
+            continue
         if not os.path.isfile(sidecar_src):
             continue
 

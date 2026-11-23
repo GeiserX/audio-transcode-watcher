@@ -260,6 +260,9 @@ class TestIsIgnoredFile:
         config = self._config("/music", [".stversions/"])
         assert is_ignored_file("/music2/.stversions/a.flac", config) is False
 
+        config = self._config("/music", ["../music2/"])
+        assert is_ignored_file("/music2/a.flac", config) is False
+
     def test_source_path_with_trailing_slash(self):
         """A trailing slash on source.path does not change the match."""
         config = self._config("/music/", [".stversions/"])
@@ -281,6 +284,9 @@ class TestIsIgnoredFile:
 
         config = self._config("/music", [f"{nfc_name}/"])
         assert is_ignored_file(f"/music/{nfd_name}/a.flac", config) is True
+
+        config = self._config(f"/{nfd_name}", [".stversions/"])
+        assert is_ignored_file(f"/{nfc_name}/.stversions/a.flac", config) is True
 
 
 class TestProcessSourceFile:
@@ -596,6 +602,27 @@ class TestSyncSidecars:
 
         assert not (output / ".stversions").exists()
         assert (output / "Album" / "song.lrc").read_text() == "[00:01.00] New"
+
+    def test_skips_lrc_named_in_ignored_files(self, temp_dir):
+        """An entry that names the .lrc itself keeps it out of the outputs."""
+        source = Path(temp_dir) / "source"
+        album = source / "Album"
+        album.mkdir(parents=True)
+        (album / "song.flac").touch()
+        (album / "song.lrc").write_text("[00:01.00] Hello")
+
+        output = Path(temp_dir) / "output"
+        output.mkdir()
+
+        config = Config(
+            source_path=str(source),
+            outputs=[OutputConfig(name="out", codec="aac", path=str(output))],
+            ignored_files=["Album/song.lrc"],
+        )
+
+        sync_sidecars(str(album / "song.flac"), config)
+
+        assert not (output / "Album" / "song.lrc").exists()
 
     def test_skips_when_no_lrc_exists(self, temp_dir):
         """Test that nothing happens when source has no .lrc file."""
