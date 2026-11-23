@@ -9,7 +9,7 @@ import shutil
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from pathlib import Path
+from pathlib import Path, PurePath
 
 from . import manifest, replaygain
 from .config import Config, OutputConfig
@@ -111,6 +111,23 @@ def safety_guard_active(config: Config) -> bool:
 
     return False
 
+def is_ignored_file(file_path: str, config: Config) -> bool:
+    if not config.ignored_files:
+        return False
+
+    # Find file within source dir + string leading /'s
+    # IE my/files/nested/file.mp3 becomes nested/file.mp3, if source_path is my/files
+    rel = file_path[len(config.source_path):].lstrip("/")
+
+    for pattern in config.ignored_files:
+        if rel.startswith(pattern.lstrip("/")):
+            logger.info(
+                "Skipping file: %s (ignored by ignored_files config)",
+                file_path,
+            )
+            return True
+
+    return False
 
 def process_source_file(
     source_path: str,
@@ -133,6 +150,9 @@ def process_source_file(
         return
 
     if safety_guard_active(config):
+        return
+
+    if is_ignored_file(source_path, config):
         return
 
     # Wait for file to stabilize if needed

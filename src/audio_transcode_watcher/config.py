@@ -140,6 +140,7 @@ class Config:
     parallel_workers: int = 4  # Number of parallel encoding workers
     stability_timeout: float = 60.0
     min_stable_seconds: float = 1.0
+    ignored_files: list[str] = field(default_factory=list)
     fetch_lyrics: bool = True  # Auto-fetch .lrc lyrics via syncedlyrics
     sync_interval_seconds: int = 300  # Seconds between periodic full syncs
     corrupt_source: str = "skip"  # Default for outputs that don't set it
@@ -208,6 +209,7 @@ class Config:
             parallel_workers=settings.get("parallel_workers", 4),
             stability_timeout=settings.get("stability_timeout", 60.0),
             min_stable_seconds=settings.get("min_stable_seconds", 1.0),
+            ignored_files=settings.get("ignored_files", []),
             fetch_lyrics=settings.get("fetch_lyrics", True),
             sync_interval_seconds=settings.get("sync_interval_seconds", 300),
             corrupt_source=settings.get("corrupt_source", "skip"),
