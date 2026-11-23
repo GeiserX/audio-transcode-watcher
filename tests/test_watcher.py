@@ -237,6 +237,31 @@ class TestOnMoved:
         mock_del_sc.assert_called_once()
         mock_sync_sc.assert_called_once()
 
+    def test_sidecar_moved_into_ignored_folder_is_not_copied(self, tmp_path):
+        """A .lrc that Syncthing moves into .stversions/ stays out of the outputs."""
+        src = tmp_path / "source"
+        out = tmp_path / "output"
+        (src / "Album").mkdir(parents=True)
+        (out / "Album").mkdir(parents=True)
+        (out / "Album" / "song.lrc").write_text("[00:01.00] Old")
+        versions = src / ".stversions" / "Album"
+        versions.mkdir(parents=True)
+        moved = versions / "song~20240101-120000.lrc"
+        moved.write_text("[00:01.00] Old")
+        config = Config(
+            source_path=str(src),
+            outputs=[OutputConfig(name="mp3", codec="mp3", path=str(out))],
+            ignored_files=[".stversions/"],
+        )
+        handler = AudioSyncHandler(config)
+
+        handler.on_moved(_event(str(src / "Album" / "song.lrc"), dest_path=str(moved)))
+        handler.on_created(_event(str(moved)))
+        handler.on_modified(_event(str(moved)))
+
+        assert not (out / ".stversions").exists()
+        assert not (out / "Album" / "song.lrc").exists()
+
     @patch("audio_transcode_watcher.watcher.sync_sidecars")
     @patch("audio_transcode_watcher.watcher.delete_sidecars")
     def test_move_from_sidecar_to_non_sidecar(self, mock_del_sc, mock_sync_sc, handler):

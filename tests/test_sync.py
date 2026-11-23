@@ -571,6 +571,31 @@ class TestSyncSidecars:
         assert (out2 / "Artist - Song.lrc").exists()
         assert (out1 / "Artist - Song.lrc").read_text() == "[00:01.00] Hello"
 
+    def test_skips_lrc_in_ignored_folder(self, temp_dir):
+        """A .lrc inside an ignored folder is not copied; its neighbours are."""
+        source = Path(temp_dir) / "source"
+        versions = source / ".stversions" / "Album"
+        versions.mkdir(parents=True)
+        (versions / "song~20240101-120000.lrc").write_text("[00:01.00] Old")
+        album = source / "Album"
+        album.mkdir()
+        (album / "song.lrc").write_text("[00:01.00] New")
+
+        output = Path(temp_dir) / "output"
+        output.mkdir()
+
+        config = Config(
+            source_path=str(source),
+            outputs=[OutputConfig(name="out", codec="aac", path=str(output))],
+            ignored_files=[".stversions/"],
+        )
+
+        sync_sidecars(str(versions / "song~20240101-120000.lrc"), config)
+        sync_sidecars(str(album / "song.lrc"), config)
+
+        assert not (output / ".stversions").exists()
+        assert (output / "Album" / "song.lrc").read_text() == "[00:01.00] New"
+
     def test_skips_when_no_lrc_exists(self, temp_dir):
         """Test that nothing happens when source has no .lrc file."""
         source = Path(temp_dir) / "source"
