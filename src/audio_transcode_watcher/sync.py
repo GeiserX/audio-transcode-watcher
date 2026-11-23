@@ -9,7 +9,7 @@ import shutil
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from pathlib import Path, PurePath
+from pathlib import Path
 
 from . import manifest, replaygain
 from .config import Config, OutputConfig
