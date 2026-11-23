@@ -2,17 +2,21 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.8.0] - 2026-11-23
 
 ### Added
 
-- `settings.ignored_files` keeps folders and files in the source folder out of every output, for example the `.stversions/` folder where a sync tool keeps old versions. Each entry is a path relative to the source folder. Each folder or file name in it can be a pattern with `*`, `?` and `[...]`, case-sensitive, and an entry that starts with `**/` matches at any depth, like `**/.stversions` or `**/*.wav`. Any other entry starts at the top of the source. The watcher treats an ignored path as if it were not there. A sync does not read ignored folders, and file events inside them do nothing. An ignored lossless file no longer hides a lossy file with the same name. Outputs and `.lrc` copies whose only source is ignored are removed like any orphan, so copies made before the entry existed are cleaned up. They come back if the entry is removed. If every audio file in the source is ignored, the safety guard treats the source as empty and removes nothing. Each full sync logs one INFO line with the counts. An entry with a `..` part, or one that is only `**`, stops the watcher at startup. With the key unset, nothing changes. See [Ignored paths](docs/configuration.md#ignored-paths).
+- `settings.ignored_files` keeps folders and files in the source folder out of every output, for example the `.stversions/` folder where a sync tool keeps old versions. Each entry is a path relative to the source folder. Each folder or file name in it can be a pattern with `*`, `?` and `[...]`, case-sensitive, and an entry that starts with `**/` matches at any depth, like `**/.stversions` or `**/*.wav`. Any other entry starts at the top of the source. The watcher treats an ignored path as if it were not there. A sync does not read ignored folders, and file events inside them do nothing. An ignored lossless file no longer hides a lossy file with the same name. Outputs and `.lrc` copies whose only source is ignored are removed like any orphan, so copies made before the entry existed are cleaned up. They come back if the entry is removed. If every audio file in the source is ignored, the safety guard treats the source as empty and removes nothing. Each full sync logs one INFO line with the counts. An entry with a `..` part, or one that is only `**`, stops the watcher at startup. With the key unset, nothing changes. See [Ignored paths](docs/configuration.md#ignored-paths). Thanks to @delete-44 for the idea and the first version (#50).
 - `source.formats` lists the source formats to process, for example `formats: [alac]` for an Apple Lossless library. The names are `flac`, `alac`, `wav`, `aiff`, `ape`, `wavpack`, `tta`, `tak`, `mp3`, `aac`, `vorbis`, `opus` and `wma`. A file in a format the list leaves out is treated like an ignored path: it gets no outputs, its old outputs are removed as orphans, and if no listed format is left the safety guard removes nothing. An unknown name, an empty list or a value that is not a list stops the watcher at startup with an error that lists the valid names. With the key unset, every format is processed, as before. See [Start from any format](docs/configuration.md#start-from-any-format).
 
 ### Fixed
 
 - An ALAC `.m4a` source is now treated as lossless. Before, every `.m4a` counted as AAC, so an ALAC file was copied unchanged into an AAC output, which left a lossless file in the AAC folder, and it was never encoded into a FLAC or WAV output. The watcher now asks `ffprobe` which codec an `.m4a` holds, once per file version. An ALAC source is encoded into every output, and it wins over a lossy file with the same name, as a FLAC does. A FLAC next to an ALAC file of the same name still wins, also when it arrives after the ALAC file was encoded. An `.m4a` that `ffprobe` cannot read logs one WARNING and is treated as AAC, as before.
 - An encode from an M4A source into an ALAC or AAC output keeps the ReplayGain, MusicBrainz and other freeform tags, in UTF-8 or UTF-16. FFmpeg drops them, and they were only copied back from FLAC, Ogg, APE and ID3 sources.
+
+### Changed
+
+- The image is built on `python:3.15-slim`.
 
 ### Upgrading
 
@@ -94,6 +98,7 @@ All notable changes to this project are documented here. The format follows [Kee
 - Lossy copies are written through a temp file and renamed, like encodes, so a half-written copy is never visible.
 - `force_reencode: true` purges the outputs once at startup. It used to purge them again on every periodic sync, which re-encoded the whole library every five minutes.
 
+[0.8.0]: https://github.com/GeiserX/audio-transcode-watcher/releases/tag/v0.8.0
 [0.7.2]: https://github.com/GeiserX/audio-transcode-watcher/releases/tag/v0.7.2
 [0.7.1]: https://github.com/GeiserX/audio-transcode-watcher/releases/tag/v0.7.1
 [0.7.0]: https://github.com/GeiserX/audio-transcode-watcher/releases/tag/v0.7.0
