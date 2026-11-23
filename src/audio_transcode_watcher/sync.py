@@ -32,9 +32,11 @@ from .utils import (
     get_output_filename,
     get_rel_stem,
     has_audio_extension,
+    has_unignored_audio,
     is_audio_file,
     is_lossless,
     lossy_source_codec,
+    matches_ignored,
     nfc,
     nfc_path,
     remove_empty_dirs,
@@ -71,6 +73,13 @@ _MP4_CODECS = {"alac", "aac"}
 _last_safety_log_ts = 0.0
 _SAFETY_LOG_INTERVAL = 10.0
 
+# With ignored_files set, the guard also looks for one audio file outside
+# them. A hit is trusted for this long (seconds), so the guard, called for
+# every file, does not walk the source every time. The cheap empty-folder
+# check above it still runs on every call.
+_UNIGNORED_AUDIO_TTL = 60.0
+_unignored_audio_seen: dict[tuple[str, tuple[str, ...]], float] = {}
+
 
 def safety_guard_active(config: Config) -> bool:
     """
@@ -88,6 +97,18 @@ def safety_guard_active(config: Config) -> bool:
         now = time.time()
         if now - _last_safety_log_ts >= _SAFETY_LOG_INTERVAL:
             logger.warning("Safety guard active: source directory appears empty")
+            _last_safety_log_ts = now
+        return True
+
+    # A source whose audio is all ignored counts as empty too, so a too
+    # broad entry never makes the orphan pass remove every output.
+    if config.ignored_files and not _has_unignored_audio(config):
+        now = time.time()
+        if now - _last_safety_log_ts >= _SAFETY_LOG_INTERVAL:
+            logger.warning(
+                "Safety guard active: every audio file in the source matches "
+                "settings.ignored_files, so the source counts as empty"
+            )
             _last_safety_log_ts = now
         return True
 
@@ -112,35 +133,59 @@ def safety_guard_active(config: Config) -> bool:
     return False
 
 
+def _has_unignored_audio(config: Config) -> bool:
+    """True if the source holds an audio file that ignored_files keeps."""
+    key = (config.source_path, tuple(config.ignored_files))
+    now = time.monotonic()
+    seen = _unignored_audio_seen.get(key)
+    if seen is not None and now - seen < _UNIGNORED_AUDIO_TTL:
+        return True
+    found = has_unignored_audio(
+        config.source_path, lambda p: is_ignored_file(p, config)
+    )
+    if found:
+        _unignored_audio_seen[key] = now
+    else:
+        _unignored_audio_seen.pop(key, None)
+    return found
+
+
 def is_ignored_file(file_path: str, config: Config) -> bool:
     """
-    Check if config.ignored_files paths apply to the current file we're trying to process
+    Check if *file_path* (a file or a folder) matches config.ignored_files.
 
-    Each pattern is a path relative to the source folder and matches whole
-    path parts: ".stversions" (or ".stversions/") matches everything inside
-    that folder, but not ".stversions-old/".
+    Each entry is a path relative to the source folder and matches whole
+    path parts, with fnmatch patterns per part and ``**`` for any number
+    of folders: ".stversions" (or ".stversions/") matches everything inside
+    that folder, but not ".stversions-old/"; "**/.stversions" matches it at
+    any depth. See utils.matches_ignored.
     """
-    if not config.ignored_files:
+    if not config.ignored_files or not file_path:
         return False
 
     # Find file within source dir
     # IE my/files/nested/file.mp3 becomes nested/file.mp3, if source_path is my/files
     rel = os.path.relpath(nfc_path(file_path), nfc_path(config.source_path))
-    rel_parts = Path(rel).parts
-    if not rel_parts or rel_parts[0] == os.pardir:
-        return False
-
-    for pattern in config.ignored_files:
-        parts = Path(nfc(pattern).strip("/")).parts
-        if parts and rel_parts[: len(parts)] == parts:
-            # Debug, not info: a periodic sync would log every ignored file.
-            logger.debug(
-                "Skipping file: %s (ignored by ignored_files config)",
-                file_path,
-            )
-            return True
-
+    if matches_ignored(rel, config.ignored_files):
+        # Debug, not info: a periodic sync would log every ignored file.
+        logger.debug("Skipping %s (ignored by ignored_files config)", file_path)
+        return True
     return False
+
+
+def walk_sources(
+    config: Config,
+    counts: dict[str, int] | None = None,
+    root: str | None = None,
+) -> list[str]:
+    """All audio sources under *root* (the source folder), minus the ignored ones.
+
+    Ignored folders are not entered at all.
+    """
+    root = config.source_path if root is None else root
+    if not config.ignored_files:
+        return walk_audio_files(root)
+    return walk_audio_files(root, lambda p: is_ignored_file(p, config), counts)
 
 
 def process_source_file(
@@ -314,19 +359,27 @@ def _remember_failure(source_path: str) -> None:
 
 
 def _has_lossless_source(source_path: str, config: Config) -> bool:
-    """Check if a lossless source with the same stem exists."""
+    """Check if a lossless source with the same stem exists (and is not ignored)."""
     stem = Path(source_path).stem
     source_dir = os.path.dirname(source_path)
 
     for ext in LOSSLESS_EXTENSIONS:
         lossless_path = os.path.join(source_dir, f"{stem}{ext}")
-        if os.path.exists(lossless_path) and lossless_path != source_path:
+        if (
+            os.path.exists(lossless_path)
+            and lossless_path != source_path
+            and not is_ignored_file(lossless_path, config)
+        ):
             return True
     return False
 
 
 def _lossy_siblings(source_path: str) -> list[str]:
-    """Lossy sources with the same stem as *source_path*, in its folder."""
+    """Lossy sources with the same stem as *source_path*, in its folder.
+
+    Ignored siblings are included on purpose: the lossless source wins over
+    them either way, and a copy of an ignored file must not stay behind.
+    """
     stem = Path(source_path).stem
     source_dir = os.path.dirname(source_path)
     siblings = []
@@ -372,13 +425,17 @@ def _remove_lossy_copies(
             logger.error("Failed to remove lossy copy %s: %s", copy_path, e)
 
 
-def _has_other_source(source_path: str) -> bool:
-    """Check if another audio source with the same stem exists."""
+def _has_other_source(source_path: str, config: Config) -> bool:
+    """Check if another audio source with the same stem exists (and is not ignored)."""
     stem = Path(source_path).stem
     source_dir = os.path.dirname(source_path)
     for ext in AUDIO_EXTENSIONS:
         other = nfc_path(os.path.join(source_dir, f"{stem}{ext}"))
-        if other != source_path and os.path.exists(other):
+        if (
+            other != source_path
+            and os.path.exists(other)
+            and not is_ignored_file(other, config)
+        ):
             return True
     return False
 
@@ -587,7 +644,7 @@ def delete_outputs(source_path: str, config: Config) -> None:
 
     # Sidecars are shared by every source of the stem; remove them only
     # when no other source of the stem remains.
-    if not _has_other_source(source_path):
+    if not _has_other_source(source_path, config):
         delete_sidecars(source_path, config)
 
     # Clean up empty subdirectories left after deletions
@@ -754,11 +811,18 @@ def initial_sync(config: Config, periodic: bool = False) -> None:
     logger.info("%s …", label)
 
     # Collect source files recursively
+    ignored = {"folders": 0, "files": 0}
     try:
-        source_files = walk_audio_files(config.source_path)
+        source_files = walk_sources(config, ignored)
     except Exception:
         logger.exception("Failed to scan source")
         return
+    if config.ignored_files:
+        logger.info(
+            "ignored_files: %d folders not read, %d more audio files skipped",
+            ignored["folders"],
+            ignored["files"],
+        )
 
     # Process all source files in parallel (skip stability check - files are on disk)
     workers = getattr(config, "parallel_workers", DEFAULT_PARALLEL_WORKERS)
@@ -799,6 +863,14 @@ def _age_seconds(path: str, now: float) -> float:
     return now - max(st.st_mtime, st.st_ctime)
 
 
+def _sidecar_source_ignored(full: str, output: OutputConfig, config: Config) -> bool:
+    """True if the source sidecar that *full* in *output* copies is ignored."""
+    if not config.ignored_files:
+        return False
+    rel = os.path.relpath(full, output.path)
+    return is_ignored_file(os.path.join(config.source_path, rel), config)
+
+
 def _cleanup_orphans(config: Config) -> None:
     """Remove output files that no longer have a source.
 
@@ -812,7 +884,7 @@ def _cleanup_orphans(config: Config) -> None:
     """
     src_root = config.source_path
     try:
-        source_files = walk_audio_files(src_root)
+        source_files = walk_sources(config)
     except Exception:
         logger.exception("Failed to scan source for orphan cleanup")
         return
@@ -872,7 +944,11 @@ def _cleanup_orphans(config: Config) -> None:
                             continue
                         kind = "orphan"
                     elif fname.lower().endswith(tuple(SIDECAR_EXTENSIONS)):
-                        if get_rel_stem(full, output.path) in source_stems:
+                        if get_rel_stem(
+                            full, output.path
+                        ) in source_stems and not _sidecar_source_ignored(
+                            full, output, config
+                        ):
                             continue
                         kind = "orphan sidecar"
                     else:

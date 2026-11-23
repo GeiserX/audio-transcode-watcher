@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- `settings.ignored_files` keeps folders and files in the source folder out of every output, for example the `.stversions/` folder where a sync tool keeps old versions. Each entry is a path relative to the source folder. Each folder or file name in it can be a pattern with `*`, `?` and `[...]`, case-sensitive, and an entry that starts with `**/` matches at any depth, like `**/.stversions` or `**/*.wav`. Any other entry starts at the top of the source. The watcher treats an ignored path as if it were not there: a sync does not read ignored folders, file events inside them do nothing, and an ignored lossless file no longer hides a lossy file with the same name. Outputs and `.lrc` copies whose only source is ignored are removed like any orphan, so copies made before the entry existed are cleaned up, and they come back if the entry is removed. If every audio file in the source is ignored, the safety guard treats the source as empty and removes nothing. Each full sync logs one INFO line with the counts. An entry with a `..` part, or one that is only `**`, stops the watcher at startup. With the key unset, nothing changes. See [Ignored paths](docs/configuration.md#ignored-paths).
+
 ## [0.7.2] - 2026-10-21
 
 ### Security

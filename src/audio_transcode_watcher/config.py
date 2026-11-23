@@ -11,6 +11,8 @@ from typing import Any
 
 import yaml
 
+from .utils import ignore_entry_parts
+
 logger = logging.getLogger(__name__)
 
 # Settings that older releases read and this one ignores. A config that
@@ -168,10 +170,11 @@ class Config:
         # "ignored_files:" with no items loads as None.
         if self.ignored_files is None:
             self.ignored_files = []
-        # A plain string would be read one character at a time, and an empty
-        # or "/" item would match every file, so both are refused here.
+        # A plain string would be read one character at a time, an empty,
+        # "/" or "**" item would match every file, and ".." points outside
+        # the source folder, so all of them are refused here.
         if not isinstance(self.ignored_files, list) or not all(
-            isinstance(p, str) and Path(p.strip("/")).parts for p in self.ignored_files
+            isinstance(p, str) and _valid_ignore_entry(p) for p in self.ignored_files
         ):
             raise ValueError(
                 "settings.ignored_files must be a list of paths inside the source folder"
@@ -242,6 +245,11 @@ class Config:
         """Load configuration from a JSON string."""
         data = json.loads(json_str)
         return cls.from_dict(data)
+
+
+def _valid_ignore_entry(entry: str) -> bool:
+    parts = ignore_entry_parts(entry)
+    return bool(parts) and os.pardir not in parts and set(parts) != {"**"}
 
 
 def _warn_deprecated_settings(settings: dict[str, Any]) -> None:

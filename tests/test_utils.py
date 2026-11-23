@@ -477,3 +477,25 @@ class TestExtensionClassification:
             (Path(temp_dir) / name).touch()
         found = sorted(Path(f).name for f in walk_audio_files(temp_dir))
         assert found == ["a.aif", "b.tak", "c.wma", "d.ogg"]
+
+
+class TestWalkWithIgnored:
+    """walk_audio_files prunes folders the predicate ignores."""
+
+    def test_prunes_and_counts(self, temp_dir):
+        root = Path(temp_dir)
+        for rel in ["A/a.flac", "A/notes.txt", "Skip/deep/b.flac", "A/c.wav"]:
+            p = root / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.touch()
+        asked = []
+
+        def ignored(path):
+            asked.append(path)
+            return Path(path).name in {"Skip", "c.wav"}
+
+        counts = {}
+        found = walk_audio_files(temp_dir, ignored, counts)
+        assert [Path(f).name for f in found] == ["a.flac"]
+        assert counts == {"folders": 1, "files": 1}
+        assert not [p for p in asked if "deep" in p]

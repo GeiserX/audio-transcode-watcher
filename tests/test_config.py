@@ -158,6 +158,31 @@ class TestConfig:
                 ignored_files=value,
             )
 
+    @pytest.mark.parametrize(
+        "value",
+        [["../other"], ["Album/../../other"], [".."], ["**"], ["**/"], ["/**/**/"]],
+    )
+    def test_ignored_files_entry_outside_source_raises_error(
+        self, sample_output_config, value
+    ):
+        """An entry that climbs out of the source, or matches all of it, stops at startup."""
+        with pytest.raises(ValueError, match="ignored_files must be a list of paths"):
+            Config(
+                source_path="/music",
+                outputs=[sample_output_config],
+                ignored_files=value,
+            )
+
+    def test_ignored_files_patterns_load(self, sample_output_config):
+        """Glob entries are valid paths."""
+        entries = ["**/.stversions", "**/*.wav", "*/Live", "Disc [12]/", "a..b"]
+        config = Config(
+            source_path="/music",
+            outputs=[sample_output_config],
+            ignored_files=entries,
+        )
+        assert config.ignored_files == entries
+
     def test_output_paths_property(self, sample_config):
         """Test the output_paths property."""
         paths = sample_config.output_paths

@@ -260,7 +260,7 @@ class TestIsIgnoredFile:
         config = self._config("/music", [".stversions/"])
         assert is_ignored_file("/music2/.stversions/a.flac", config) is False
 
-        config = self._config("/music", ["../music2/"])
+        config = self._config("/music", ["**/a.flac"])
         assert is_ignored_file("/music2/a.flac", config) is False
 
     def test_source_path_with_trailing_slash(self):
@@ -2614,3 +2614,223 @@ class TestTolerantCopyReplacedByCleanSource:
         process_source_file(str(flac), config, force=False, check_stable=False)
 
         mock_encode.assert_not_called()
+
+
+class TestIgnorePatterns:
+    """ignored_files entries take fnmatch patterns per path part."""
+
+    @staticmethod
+    def _ignored(entries, path, source="/music"):
+        config = Config(
+            source_path=source,
+            outputs=[OutputConfig(name="out", codec="alac", path="/out")],
+            ignored_files=entries,
+        )
+        return is_ignored_file(f"{source}/{path}", config)
+
+    def test_double_star_matches_at_any_depth(self):
+        entry = ["**/.stversions"]
+        assert self._ignored(entry, ".stversions/a.flac")
+        assert self._ignored(entry, "Artist/Album/.stversions/a.flac")
+        assert not self._ignored(entry, "Artist/.stversions-old/a.flac")
+        assert not self._ignored(entry, "Artist/Album/a.flac")
+
+    def test_extension_pattern_at_any_depth(self):
+        entry = ["**/*.wav"]
+        assert self._ignored(entry, "take.wav")
+        assert self._ignored(entry, "Artist/Album/take.wav")
+        assert not self._ignored(entry, "Artist/Album/take.flac")
+
+    def test_patterns_are_case_sensitive(self):
+        assert not self._ignored(["**/*.wav"], "Album/take.WAV")
+        assert not self._ignored(["live"], "Live/a.flac")
+
+    def test_star_matches_one_folder_and_stays_anchored(self):
+        entry = ["*/Live"]
+        assert self._ignored(entry, "Artist/Live/a.flac")
+        assert not self._ignored(entry, "Live/a.flac")
+        assert not self._ignored(entry, "Artist/Album/Live/a.flac")
+
+    def test_question_mark_and_brackets(self):
+        assert self._ignored(["Disc [12]"], "Disc 2/a.flac")
+        assert not self._ignored(["Disc [12]"], "Disc 3/a.flac")
+        assert self._ignored(["Take ?.flac"], "Take 7.flac")
+        assert not self._ignored(["Take ?.flac"], "Take 10.flac")
+
+    def test_exact_name_with_pattern_characters_still_matches(self):
+        """An entry that worked before patterns existed keeps working."""
+        assert self._ignored(["Live [1999]/"], "Live [1999]/a.flac")
+
+    def test_double_star_in_the_middle(self):
+        entry = ["Artist/**/bonus.flac"]
+        assert self._ignored(entry, "Artist/bonus.flac")
+        assert self._ignored(entry, "Artist/Album/CD1/bonus.flac")
+        assert not self._ignored(entry, "Other/bonus.flac")
+
+    def test_trailing_double_star_is_the_folder(self):
+        assert self._ignored(["Album/**"], "Album/a.flac")
+        assert not self._ignored(["Album/**"], "Album2/a.flac")
+
+    def test_unicode_forms_match_patterns(self):
+        nfd = unicodedata.normalize("NFD", "Música")
+        nfc_name = unicodedata.normalize("NFC", "Música")
+        assert self._ignored([f"**/{nfd}*"], f"A/{nfc_name} vieja/a.flac")
+
+
+def _tree_config(temp_dir, ignored, codec="alac", **kwargs):
+    source, out = _dirs(temp_dir, "source", "out")
+    config = Config(
+        source_path=str(source),
+        outputs=[OutputConfig(name="out", codec=codec, path=str(out))],
+        ignored_files=ignored,
+        fetch_lyrics=False,
+        parallel_workers=1,
+        **kwargs,
+    )
+    return source, out, config
+
+
+def _touch(root, *rels, content=b"x"):
+    for rel in rels:
+        p = Path(root) / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(content)
+
+
+def _files(root):
+    return sorted(
+        str(p.relative_to(root))
+        for p in Path(root).rglob("*")
+        if p.is_file() and p.name != manifest.MANIFEST_NAME
+    )
+
+
+@pytest.mark.usefixtures("fresh_manifests")
+class TestIgnoredSourcesAreNotSources:
+    """An ignored source is treated as if it were not in the source folder."""
+
+    def test_full_sync_prunes_pattern_folders(self, temp_dir):
+        source, out, config = _tree_config(temp_dir, ["**/.stversions"])
+        _touch(source, "Album/song.flac", "Album/.stversions/song~1.flac")
+        with patch(
+            "audio_transcode_watcher.sync.atomic_ffmpeg_encode",
+            side_effect=_fake_encode(b"enc"),
+        ):
+            initial_sync(config)
+        assert _files(out) == ["Album/song.m4a"]
+
+    def test_walk_never_enters_an_ignored_folder(self, temp_dir):
+        source, _out, config = _tree_config(temp_dir, ["Old"])
+        _touch(source, "Album/song.flac", "Old/deep/a.flac")
+        seen = []
+        real = sync_mod.is_ignored_file
+
+        def spy(path, cfg):
+            seen.append(path)
+            return real(path, cfg)
+
+        with patch("audio_transcode_watcher.sync.is_ignored_file", side_effect=spy):
+            found = sync_mod.walk_sources(config)
+        assert [Path(f).name for f in found] == ["song.flac"]
+        assert not [p for p in seen if "deep" in p]
+
+    def test_leaked_outputs_and_sidecars_are_removed(self, temp_dir):
+        """Outputs made before the entry existed go like any orphan."""
+        source, out, config = _tree_config(temp_dir, ["**/.stversions"])
+        _touch(source, "Album/song.flac", "Album/.stversions/song~1.flac")
+        _touch(source, "Album/.stversions/song~1.lrc", content=b"[00:01.00] a")
+        _touch(out, "Album/song.m4a")
+        _touch(out, "Album/.stversions/song~1.m4a", "Album/.stversions/song~1.lrc")
+        _cleanup_orphans(config)
+        assert _files(out) == ["Album/song.m4a"]
+
+    def test_ignored_sidecar_output_is_removed(self, temp_dir):
+        source, out, config = _tree_config(temp_dir, ["Album/song.lrc"])
+        _touch(source, "Album/song.flac", "Album/song.lrc")
+        _touch(out, "Album/song.m4a", "Album/song.lrc")
+        _cleanup_orphans(config)
+        assert _files(out) == ["Album/song.m4a"]
+
+    def test_ignored_lossless_twin_gives_the_lossy_file_its_output(self, temp_dir):
+        source, out, config = _tree_config(temp_dir, ["**/*.flac"], codec="mp3")
+        _touch(source, "Album/x.flac", "Album/x.mp3")
+        with patch(
+            "audio_transcode_watcher.sync.atomic_ffmpeg_encode",
+            side_effect=_fake_encode(b"enc"),
+        ) as enc:
+            process_source_file(str(source / "Album/x.mp3"), config, check_stable=False)
+        enc.assert_not_called()  # an MP3 into an MP3 output is a copy
+        assert (out / "Album/x.mp3").read_bytes() == b"x"
+        _cleanup_orphans(config)
+        assert _files(out) == ["Album/x.mp3"]
+
+    def test_deleting_the_lossy_twin_removes_its_output(self, temp_dir):
+        """An ignored lossless twin no longer keeps the lossy outputs alive."""
+        source, out, config = _tree_config(temp_dir, ["Album/x.flac"], codec="mp3")
+        _touch(source, "Album/x.flac", "Album/x.mp3", "Album/x.lrc", "Album/y.flac")
+        _touch(out, "Album/x.mp3", "Album/x.lrc")
+        (source / "Album/x.mp3").unlink()
+        delete_outputs(str(source / "Album/x.mp3"), config)
+        assert _files(out) == []
+
+
+class TestIgnoredSafetyGuard:
+    """A source whose audio is all ignored counts as empty."""
+
+    @pytest.fixture(autouse=True)
+    def _log_every_time(self, monkeypatch):
+        monkeypatch.setattr(sync_mod, "_last_safety_log_ts", 0.0)
+
+    def test_guard_trips_and_warns(self, temp_dir, caplog):
+        source, out, config = _tree_config(temp_dir, ["Old"])
+        _touch(source, "Old/a.flac", "cover.jpg")
+        _touch(out, "Album/song.m4a")
+        with caplog.at_level(logging.INFO, logger="audio_transcode_watcher.sync"):
+            initial_sync(config)
+        assert _files(out) == ["Album/song.m4a"]
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 1
+        assert "ignored_files" in warnings[0].message
+
+    def test_guard_stays_off_with_one_kept_file(self, temp_dir):
+        source, _out, config = _tree_config(temp_dir, ["Old"])
+        _touch(source, "Old/a.flac", "New/b.flac")
+        assert safety_guard_active(config) is False
+
+    def test_guard_unchanged_without_ignored_files(self, temp_dir):
+        source, _out, config = _tree_config(temp_dir, [])
+        _touch(source, "Old/a.flac")
+        assert safety_guard_active(config) is False
+
+
+class TestIgnoredCountLog:
+    """One INFO line per full sync counts what ignored_files kept out."""
+
+    @patch("audio_transcode_watcher.sync._cleanup_orphans")
+    @patch("audio_transcode_watcher.sync.process_source_file")
+    def test_one_line_with_counts(self, mock_proc, _orphans, temp_dir, caplog):
+        source, _out, config = _tree_config(temp_dir, ["**/.stversions", "**/*.wav"])
+        _touch(
+            source,
+            "Album/song.flac",
+            "Album/take.wav",
+            "Live/take.wav",
+            "Album/.stversions/a.flac",
+            "Live/.stversions/b.flac",
+        )
+        with caplog.at_level(logging.INFO, logger="audio_transcode_watcher.sync"):
+            initial_sync(config, periodic=True)
+        assert mock_proc.call_count == 1
+        lines = [r.message for r in caplog.records if "ignored_files" in r.message]
+        assert lines == [
+            "ignored_files: 2 folders not read, 2 more audio files skipped"
+        ]
+
+    @patch("audio_transcode_watcher.sync._cleanup_orphans")
+    @patch("audio_transcode_watcher.sync.process_source_file")
+    def test_no_line_without_entries(self, _proc, _orphans, temp_dir, caplog):
+        source, _out, config = _tree_config(temp_dir, [])
+        _touch(source, "Album/song.flac")
+        with caplog.at_level(logging.INFO, logger="audio_transcode_watcher.sync"):
+            initial_sync(config)
+        assert "ignored_files" not in caplog.text
