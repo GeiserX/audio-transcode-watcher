@@ -115,16 +115,24 @@ def safety_guard_active(config: Config) -> bool:
 def is_ignored_file(file_path: str, config: Config) -> bool:
     """
     Check if config.ignored_files paths apply to the current file we're trying to process
+
+    Each pattern is a path relative to the source folder and matches whole
+    path parts: ".stversions" (or ".stversions/") matches everything inside
+    that folder, but not ".stversions-old/".
     """
     if not config.ignored_files:
         return False
 
-    # Find file within source dir + strip leading /'s
+    # Find file within source dir
     # IE my/files/nested/file.mp3 becomes nested/file.mp3, if source_path is my/files
-    rel = file_path.replace(config.source_path, "").lstrip("/")
+    rel = os.path.relpath(nfc_path(file_path), nfc_path(config.source_path))
+    rel_parts = Path(rel).parts
+    if not rel_parts or rel_parts[0] == os.pardir:
+        return False
 
     for pattern in config.ignored_files:
-        if rel.startswith(pattern.lstrip("/")):
+        parts = Path(nfc(pattern).strip("/")).parts
+        if parts and rel_parts[: len(parts)] == parts:
             logger.info(
                 "Skipping file: %s (ignored by ignored_files config)",
                 file_path,

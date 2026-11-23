@@ -2,6 +2,7 @@
 
 import json
 import os
+import unicodedata
 from pathlib import Path
 from unittest.mock import patch
 
@@ -218,10 +219,67 @@ class TestIsIgnoredFile:
         config = Config(
             source_path=str(source),
             outputs=[OutputConfig(name="out", codec="alac", path=str(output))],
-            ignored_files=["file"],
+            ignored_files=["file.flac"],
         )
 
         assert is_ignored_file(str(source / "file.flac"), config) is True
+
+    @staticmethod
+    def _config(source, ignored):
+        return Config(
+            source_path=str(source),
+            outputs=[OutputConfig(name="out", codec="alac", path="/out")],
+            ignored_files=ignored,
+        )
+
+    def test_pattern_matches_whole_path_parts(self):
+        """A pattern never matches a longer folder or file name."""
+        config = self._config("/music", ["ignore"])
+
+        assert is_ignored_file("/music/ignore/file.flac", config) is True
+        assert is_ignored_file("/music/ignore-not-really/file.flac", config) is False
+        assert is_ignored_file("/music/ignore.flac", config) is False
+
+        config = self._config("/music", ["Pink"])
+        assert is_ignored_file("/music/Pink Floyd/song.flac", config) is False
+
+    def test_source_name_repeated_inside_path(self):
+        """Only the leading source folder is stripped from the path."""
+        config = self._config("/music", ["music videos/"])
+        assert is_ignored_file("/music/music videos/a.flac", config) is True
+
+        config = self._config("/music", ["videos/"])
+        assert is_ignored_file("/music/music videos/a.flac", config) is False
+
+        config = self._config("/m", ["Album/mix.flac"])
+        assert is_ignored_file("/m/Album/mix.flac", config) is True
+
+    def test_sibling_of_source_folder_is_not_matched(self):
+        """A file outside the source folder is never ignored."""
+        config = self._config("/music", [".stversions/"])
+        assert is_ignored_file("/music2/.stversions/a.flac", config) is False
+
+    def test_source_path_with_trailing_slash(self):
+        """A trailing slash on source.path does not change the match."""
+        config = self._config("/music/", [".stversions/"])
+        assert is_ignored_file("/music/.stversions/a.flac", config) is True
+
+    def test_pattern_spellings_of_one_folder(self):
+        """Leading slash, trailing slash and ./ all name the same folder."""
+        for pattern in [".stversions", ".stversions/", "/.stversions", "./.stversions"]:
+            config = self._config("/music", [pattern])
+            assert is_ignored_file("/music/.stversions/a.flac", config) is True
+
+    def test_unicode_forms_match(self):
+        """An NFD pattern matches the NFC path, and the other way round."""
+        nfc_name = unicodedata.normalize("NFC", "Música")
+        nfd_name = unicodedata.normalize("NFD", "Música")
+
+        config = self._config("/music", [f"{nfd_name}/"])
+        assert is_ignored_file(f"/music/{nfc_name}/a.flac", config) is True
+
+        config = self._config("/music", [f"{nfc_name}/"])
+        assert is_ignored_file(f"/music/{nfd_name}/a.flac", config) is True
 
 
 class TestProcessSourceFile:
