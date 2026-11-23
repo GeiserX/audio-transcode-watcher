@@ -16,7 +16,7 @@ from audio_transcode_watcher.config import Config, OutputConfig
 from audio_transcode_watcher.encoder import DECODE_ERROR_RC
 from audio_transcode_watcher.sync import (
     _cleanup_orphans,
-    _has_lossless_source,
+    _yields_to_twin,
     cleanup_stale_temp_files,
     delete_outputs,
     delete_sidecars,
@@ -786,8 +786,8 @@ class TestCleanupOrphanSidecars:
         assert not orphan_lrc.exists()
 
 
-class TestHasLosslessSource:
-    """Tests for _has_lossless_source function."""
+class TestYieldsToTwin:
+    """Tests for _yields_to_twin function."""
 
     def test_returns_true_when_lossless_exists(self, temp_dir):
         """Return True when a lossless file with same stem exists."""
@@ -807,7 +807,7 @@ class TestHasLosslessSource:
         )
         (Path(temp_dir) / "out").mkdir()
 
-        assert _has_lossless_source(str(mp3), config) is True
+        assert _yields_to_twin(str(mp3), config) is True
 
     def test_returns_false_when_no_lossless_exists(self, temp_dir):
         """Return False when no lossless file with same stem exists."""
@@ -826,7 +826,7 @@ class TestHasLosslessSource:
         )
         (Path(temp_dir) / "out").mkdir()
 
-        assert _has_lossless_source(str(mp3), config) is False
+        assert _yields_to_twin(str(mp3), config) is False
 
 
 class TestProcessSourceFileMp3Copy:

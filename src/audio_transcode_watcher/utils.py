@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 import os
+import subprocess
+import threading
 import time
 import unicodedata
 from collections.abc import Callable
@@ -13,33 +15,62 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# Audio file extensions considered as source files
-LOSSLESS_EXTENSIONS = {
-    ".flac",
-    ".alac",
-    ".wav",
-    ".aiff",
-    ".aif",
-    ".ape",
-    ".wv",
-    ".tta",
-    ".tak",
+# Every source format, by the name source.formats uses, with its file
+# extensions. This table is the one place that says which files are sources.
+# ".m4a" belongs to two formats: it holds ALAC or AAC, and source_format()
+# probes the file to tell which.
+SOURCE_FORMATS: dict[str, tuple[str, ...]] = {
+    "flac": (".flac",),
+    "alac": (".alac", ".m4a"),
+    "wav": (".wav",),
+    "aiff": (".aiff", ".aif"),
+    "ape": (".ape",),
+    "wavpack": (".wv",),
+    "tta": (".tta",),
+    "tak": (".tak",),
+    "mp3": (".mp3",),
+    "aac": (".aac", ".m4a"),
+    "vorbis": (".ogg",),
+    "opus": (".opus",),
+    "wma": (".wma",),
 }
 
-LOSSY_EXTENSIONS = {".mp3", ".aac", ".m4a", ".ogg", ".opus", ".wma"}
+LOSSLESS_FORMATS = frozenset(
+    {"flac", "alac", "wav", "aiff", "ape", "wavpack", "tta", "tak"}
+)
 
-AUDIO_EXTENSIONS = LOSSLESS_EXTENSIONS | LOSSY_EXTENSIONS
+# Extension -> the formats it can hold, in table order.
+_EXTENSION_FORMATS: dict[str, tuple[str, ...]] = {
+    ext: tuple(name for name, exts in SOURCE_FORMATS.items() if ext in exts)
+    for exts in SOURCE_FORMATS.values()
+    for ext in exts
+}
+
+# Audio file extensions considered as source files
+AUDIO_EXTENSIONS = set(_EXTENSION_FORMATS)
+
+# Extensions whose format is read from the file (".m4a": ALAC or AAC).
+PROBED_EXTENSIONS = {e for e, f in _EXTENSION_FORMATS.items() if len(f) > 1}
+
+# Lossless and lossy by extension alone. A probed extension counts as lossy
+# here, which is what it means when the probe cannot tell.
+LOSSLESS_EXTENSIONS = {
+    e for e, f in _EXTENSION_FORMATS.items() if set(f) <= LOSSLESS_FORMATS
+}
+LOSSY_EXTENSIONS = AUDIO_EXTENSIONS - LOSSLESS_EXTENSIONS
 
 # Codec of a lossy source, by extension, in the vocabulary of output codecs.
 # A lossy source is copied unchanged into a lossy output of the same codec.
 LOSSY_SOURCE_CODECS = {
-    ".mp3": "mp3",
-    ".aac": "aac",
-    ".m4a": "aac",
-    ".ogg": "vorbis",
-    ".opus": "opus",
-    ".wma": "wma",
+    e: next(n for n in _EXTENSION_FORMATS[e] if n not in LOSSLESS_FORMATS)
+    for e in LOSSY_EXTENSIONS
 }
+
+# Probing an .m4a source runs ffprobe once per file version. The result is
+# kept per path with the size and mtime it was read at.
+FFPROBE_TIMEOUT = 60
+_probe_cache: dict[str, tuple[int, float, str]] = {}
+_probe_lock = threading.Lock()
 
 # Sidecar file extensions to copy alongside transcoded audio
 SIDECAR_EXTENSIONS = {".lrc"}
@@ -87,19 +118,94 @@ def has_sidecar_extension(path: str) -> bool:
     return Path(nfc_path(path)).suffix.lower() in SIDECAR_EXTENSIONS
 
 
+def extension_formats(path: str) -> tuple[str, ...]:
+    """The formats a file with *path*'s extension can hold (no file access)."""
+    return _EXTENSION_FORMATS.get(Path(path).suffix.lower(), ())
+
+
+def source_format(path: str) -> str | None:
+    """The source format of *path*, such as ``"flac"``, or None if not audio.
+
+    An extension that two formats share (``.m4a``) is resolved by probing
+    the file; see probe_codec.
+    """
+    formats = extension_formats(path)
+    if len(formats) <= 1:
+        return formats[0] if formats else None
+    codec = probe_codec(path)
+    if codec in formats:
+        return codec
+    return LOSSY_SOURCE_CODECS[Path(path).suffix.lower()]
+
+
+def probe_codec(path: str) -> str | None:
+    """The codec name ffprobe reports for *path*'s first audio stream.
+
+    One ffprobe run per file version: the answer is cached with the file's
+    size and mtime. A file that is gone answers what it last answered. A
+    failed probe is logged once per version and answers None.
+    """
+    try:
+        st = os.stat(path)
+    except OSError:
+        with _probe_lock:
+            cached = _probe_cache.get(path)
+        return (cached[2] or None) if cached else None
+    with _probe_lock:
+        cached = _probe_cache.get(path)
+    if cached and cached[:2] == (st.st_size, st.st_mtime):
+        return cached[2] or None
+    codec = _run_ffprobe(path)
+    with _probe_lock:
+        _probe_cache[path] = (st.st_size, st.st_mtime, codec or "")
+    return codec
+
+
+def _run_ffprobe(path: str) -> str | None:
+    cmd = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-select_streams",
+        "a:0",
+        "-show_entries",
+        "stream=codec_name",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+        path,
+    ]
+    try:
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=FFPROBE_TIMEOUT, check=False
+        )
+    except (OSError, subprocess.TimeoutExpired) as e:
+        detail = str(e)
+    else:
+        codec = proc.stdout.strip().splitlines()[0] if proc.stdout.strip() else ""
+        if proc.returncode == 0 and codec:
+            return codec
+        detail = (proc.stderr.strip().splitlines() or ["no audio stream"])[-1]
+    logger.warning(
+        "Could not read the codec of %s, going by its extension: %s", path, detail
+    )
+    return None
+
+
 def is_lossless(path: str) -> bool:
-    """Check if a file is a lossless audio file."""
-    return Path(path).suffix.lower() in LOSSLESS_EXTENSIONS
+    """Check if a file is a lossless audio file (an ALAC .m4a counts)."""
+    return source_format(path) in LOSSLESS_FORMATS
 
 
 def is_lossy(path: str) -> bool:
     """Check if a file is a lossy audio file."""
-    return Path(path).suffix.lower() in LOSSY_EXTENSIONS
+    fmt = source_format(path)
+    return fmt is not None and fmt not in LOSSLESS_FORMATS
 
 
 def lossy_source_codec(path: str) -> str | None:
     """Return the codec of a lossy source (e.g. ``"mp3"``), or None if lossless."""
-    return LOSSY_SOURCE_CODECS.get(Path(path).suffix.lower())
+    fmt = source_format(path)
+    return fmt if fmt is not None and fmt not in LOSSLESS_FORMATS else None
 
 
 def is_mp3(path: str) -> bool:

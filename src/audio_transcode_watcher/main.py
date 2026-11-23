@@ -58,6 +58,8 @@ def main() -> int:
 
     # Log configuration
     logger.info("Source: %s", config.source_path)
+    if config.formats_restricted:
+        logger.info("Source formats: %s", ", ".join(sorted(config.source_formats)))
     for output in config.outputs:
         logger.info(
             "Output: %s (%s%s) -> %s",

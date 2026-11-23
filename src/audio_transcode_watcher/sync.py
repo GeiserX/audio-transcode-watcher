@@ -26,8 +26,10 @@ from .utils import (
     AUDIO_EXTENSIONS,
     LOSSLESS_EXTENSIONS,
     LOSSY_EXTENSIONS,
+    PROBED_EXTENSIONS,
     SIDECAR_EXTENSIONS,
     appears_empty_dir,
+    extension_formats,
     get_output_file_path,
     get_output_filename,
     get_rel_stem,
@@ -40,6 +42,7 @@ from .utils import (
     nfc,
     nfc_path,
     remove_empty_dirs,
+    source_format,
     wait_for_stable,
     walk_audio_files,
 )
@@ -73,12 +76,12 @@ _MP4_CODECS = {"alac", "aac"}
 _last_safety_log_ts = 0.0
 _SAFETY_LOG_INTERVAL = 10.0
 
-# With ignored_files set, the guard also looks for one audio file outside
-# them. A hit is trusted for this long (seconds), so the guard, called for
-# every file, does not walk the source every time. The cheap empty-folder
-# check above it still runs on every call.
+# With ignored_files or source.formats set, the guard also looks for one
+# audio file they keep. A hit is trusted for this long (seconds), so the
+# guard, called for every file, does not walk the source every time. The
+# cheap empty-folder check above it still runs on every call.
 _UNIGNORED_AUDIO_TTL = 60.0
-_unignored_audio_seen: dict[tuple[str, tuple[str, ...]], float] = {}
+_unignored_audio_seen: dict[tuple, float] = {}
 
 
 def safety_guard_active(config: Config) -> bool:
@@ -102,12 +105,13 @@ def safety_guard_active(config: Config) -> bool:
 
     # A source whose audio is all ignored counts as empty too, so a too
     # broad entry never makes the orphan pass remove every output.
-    if config.ignored_files and not _has_unignored_audio(config):
+    if config.filters_sources and not _has_unignored_audio(config):
         now = time.time()
         if now - _last_safety_log_ts >= _SAFETY_LOG_INTERVAL:
             logger.warning(
                 "Safety guard active: every audio file in the source matches "
-                "settings.ignored_files, so the source counts as empty"
+                "%s, so the source counts as empty",
+                _filter_names(config, "or"),
             )
             _last_safety_log_ts = now
         return True
@@ -133,9 +137,23 @@ def safety_guard_active(config: Config) -> bool:
     return False
 
 
+def _filter_names(config: Config, join: str) -> str:
+    """The settings that keep sources out, for log lines."""
+    names = []
+    if config.ignored_files:
+        names.append("settings.ignored_files")
+    if config.formats_restricted:
+        names.append("source.formats")
+    return f" {join} ".join(names)
+
+
 def _has_unignored_audio(config: Config) -> bool:
-    """True if the source holds an audio file that ignored_files keeps."""
-    key = (config.source_path, tuple(config.ignored_files))
+    """True if the source holds an audio file that is_ignored_file keeps."""
+    key = (
+        config.source_path,
+        tuple(config.ignored_files),
+        tuple(sorted(config.source_formats)),
+    )
     now = time.monotonic()
     seen = _unignored_audio_seen.get(key)
     if seen is not None and now - seen < _UNIGNORED_AUDIO_TTL:
@@ -152,25 +170,51 @@ def _has_unignored_audio(config: Config) -> bool:
 
 def is_ignored_file(file_path: str, config: Config) -> bool:
     """
-    Check if *file_path* (a file or a folder) matches config.ignored_files.
+    Check if *file_path* (a file or a folder) is kept out of processing.
 
-    Each entry is a path relative to the source folder and matches whole
-    path parts, with fnmatch patterns per part and ``**`` for any number
-    of folders: ".stversions" (or ".stversions/") matches everything inside
-    that folder, but not ".stversions-old/"; "**/.stversions" matches it at
-    any depth. See utils.matches_ignored.
+    This is the one test of whether a source is wanted. It is True if the
+    path matches config.ignored_files, or if it is an audio file whose
+    format is not in config.source_formats (source.formats).
+
+    Each ignored_files entry is a path relative to the source folder and
+    matches whole path parts, with fnmatch patterns per part and ``**`` for
+    any number of folders: ".stversions" (or ".stversions/") matches
+    everything inside that folder, but not ".stversions-old/";
+    "**/.stversions" matches it at any depth. See utils.matches_ignored.
     """
-    if not config.ignored_files or not file_path:
+    if not file_path:
         return False
 
-    # Find file within source dir
-    # IE my/files/nested/file.mp3 becomes nested/file.mp3, if source_path is my/files
-    rel = os.path.relpath(nfc_path(file_path), nfc_path(config.source_path))
-    if matches_ignored(rel, config.ignored_files):
-        # Debug, not info: a periodic sync would log every ignored file.
-        logger.debug("Skipping %s (ignored by ignored_files config)", file_path)
+    if config.ignored_files:
+        # Find file within source dir
+        # IE my/files/nested/file.mp3 becomes nested/file.mp3, if source_path is my/files
+        rel = os.path.relpath(nfc_path(file_path), nfc_path(config.source_path))
+        if matches_ignored(rel, config.ignored_files):
+            # Debug, not info: a periodic sync would log every ignored file.
+            logger.debug("Skipping %s (ignored by ignored_files config)", file_path)
+            return True
+
+    if config.formats_restricted and _unwanted_format(file_path, config):
+        logger.debug("Skipping %s (its format is not in source.formats)", file_path)
         return True
     return False
+
+
+def _unwanted_format(path: str, config: Config) -> bool:
+    """True if *path* is an audio file whose format source.formats leaves out.
+
+    The extension decides when it can; an ``.m4a`` is probed only when
+    source.formats keeps one of ALAC and AAC but not the other. A folder
+    is never left out for its name.
+    """
+    formats = extension_formats(path)
+    if not formats or config.source_formats.issuperset(formats):
+        return False
+    if os.path.isdir(path):
+        return False
+    if config.source_formats.isdisjoint(formats):
+        return True
+    return source_format(path) not in config.source_formats
 
 
 def walk_sources(
@@ -183,7 +227,7 @@ def walk_sources(
     Ignored folders are not entered at all.
     """
     root = config.source_path if root is None else root
-    if not config.ignored_files:
+    if not config.filters_sources:
         return walk_audio_files(root)
     return walk_audio_files(root, lambda p: is_ignored_file(p, config), counts)
 
@@ -275,7 +319,7 @@ def _tag_source(source_path: str, config: Config) -> None:
     if edited is None:
         return
     before, _after = edited
-    if not is_lossless(source_path) and _has_lossless_source(source_path, config):
+    if _yields_to_twin(source_path, config):
         return  # its output names belong to the lossless source of the stem
     for output in config.outputs:
         filename, _action = plan_output(source_path, output)
@@ -294,7 +338,7 @@ def _carry_replaygain(source_path: str, config: Config) -> bool:
     Returns False if an output could not be tagged or recopied, so the
     caller leaves the source unchecked and the next scan tries again.
     """
-    if not is_lossless(source_path) and _has_lossless_source(source_path, config):
+    if _yields_to_twin(source_path, config):
         return True  # its outputs belong to the lossless source of the stem
     try:
         values = replaygain.read_track_tags(source_path)
@@ -358,17 +402,37 @@ def _remember_failure(source_path: str) -> None:
         _failed_sources[source_path] = mtime
 
 
-def _has_lossless_source(source_path: str, config: Config) -> bool:
-    """Check if a lossless source with the same stem exists (and is not ignored)."""
+def _source_rank(path: str) -> int:
+    """How strongly *path* claims the output names of its stem.
+
+    2: lossless by its extension (FLAC, WAV...). 1: lossless found by
+    probing (an ALAC ``.m4a``). 0: lossy. An ALAC file beside a FLAC of the
+    same name is usually a copy of it, so the FLAC keeps winning, as it did
+    when every ``.m4a`` counted as lossy.
+    """
+    if not is_lossless(path):
+        return 0
+    return 1 if Path(path).suffix.lower() in PROBED_EXTENSIONS else 2
+
+
+def _yields_to_twin(source_path: str, config: Config) -> bool:
+    """True if a source with the same stem outranks *source_path* (and is not ignored).
+
+    The twin's outputs take the shared names, so *source_path* gets none.
+    """
+    rank = _source_rank(source_path)
+    if rank == 2:
+        return False
     stem = Path(source_path).stem
     source_dir = os.path.dirname(source_path)
 
-    for ext in LOSSLESS_EXTENSIONS:
-        lossless_path = os.path.join(source_dir, f"{stem}{ext}")
+    for ext in sorted(LOSSLESS_EXTENSIONS | PROBED_EXTENSIONS):
+        other = os.path.join(source_dir, f"{stem}{ext}")
         if (
-            os.path.exists(lossless_path)
-            and lossless_path != source_path
-            and not is_ignored_file(lossless_path, config)
+            os.path.exists(other)
+            and other != source_path
+            and not is_ignored_file(other, config)
+            and _source_rank(other) > rank
         ):
             return True
     return False
@@ -496,13 +560,48 @@ def _made_from_lossy(output: OutputConfig, out_path: str) -> bool:
     return True
 
 
+def _made_from(
+    output: OutputConfig, out_path: str, source_path: str, config: Config
+) -> bool:
+    """True if the manifest row of *out_path* names *source_path* as its source."""
+    row = manifest.lookup(output.path, out_path) or {}
+    rel = nfc_path(os.path.relpath(source_path, config.source_path))
+    return row.get("source") == rel
+
+
+def _made_from_weaker_twin(
+    output: OutputConfig, out_path: str, source_path: str, config: Config
+) -> bool:
+    """True if the manifest says a lossless twin that ranks lower made *out_path*.
+
+    This is the encode of an ALAC ``.m4a`` made before a FLAC of the same
+    name arrived: the FLAC wins, so the file is rebuilt from it. Outputs of
+    the same source or of an equal-ranked twin are left alone.
+    """
+    if _source_rank(source_path) < 2:
+        return False
+    row = manifest.lookup(output.path, out_path)
+    if (
+        not row
+        or row.get("kind") not in ("encode", "tolerant")
+        or not row.get("source")
+    ):
+        return False
+    if _made_from(output, out_path, source_path, config):
+        return False
+    # An encode from an .m4a is an encode from ALAC, which ranks 1.
+    if Path(row["source"]).suffix.lower() not in PROBED_EXTENSIONS:
+        return False
+    return manifest.output_matches(row, out_path)
+
+
 def _made_from_ignored(output: OutputConfig, out_path: str, config: Config) -> bool:
     """True if the manifest says a source that is now ignored made *out_path*.
 
     This is the encode of an ignored lossless twin: the lossy source of the
     stem gets the name now, so the file is rebuilt from it.
     """
-    if not config.ignored_files:
+    if not config.filters_sources:
         return False
     row = manifest.lookup(output.path, out_path)
     if not row or not row.get("source") or not manifest.output_matches(row, out_path):
@@ -533,8 +632,8 @@ def _process_outputs(source_path: str, config: Config, force: bool) -> bool:
 
     Returns False if an encode failed, True otherwise.
     """
-    if not is_lossless(source_path) and _has_lossless_source(source_path, config):
-        logger.debug("Skipping lossy %s - lossless source exists", source_path)
+    if _yields_to_twin(source_path, config):
+        logger.debug("Skipping %s - a lossless source of the stem wins", source_path)
         return True
 
     siblings = _lossy_siblings(source_path) if is_lossless(source_path) else []
@@ -560,15 +659,32 @@ def _process_outputs(source_path: str, config: Config, force: bool) -> bool:
                     out_path,
                 )
             elif is_lossless(source_path) and _made_from_lossy(output, out_path):
+                if _made_from(output, out_path, source_path, config):
+                    # An ALAC .m4a copied before .m4a files were probed.
+                    logger.info(
+                        "Replacing %s: it is a copy of %s, which is lossless",
+                        out_path,
+                        source_path,
+                    )
+                else:
+                    logger.info(
+                        "Replacing %s: it was made from a lossy source, %s wins",
+                        out_path,
+                        source_path,
+                    )
+            elif _made_from_weaker_twin(output, out_path, source_path, config):
                 logger.info(
-                    "Replacing %s: it was made from a lossy source, %s wins",
+                    "Replacing %s: it was made from an ALAC twin, %s wins",
                     out_path,
                     source_path,
                 )
             elif _made_from_ignored(output, out_path, config):
                 logger.info(
-                    "Replacing %s: its source is in settings.ignored_files, %s wins",
+                    "Replacing %s: its source is %s, %s wins",
                     out_path,
+                    "in settings.ignored_files"
+                    if not config.formats_restricted
+                    else "left out by " + _filter_names(config, "or"),
                     source_path,
                 )
             else:
@@ -636,9 +752,7 @@ def delete_outputs(source_path: str, config: Config) -> None:
     if safety_guard_active(config):
         return
 
-    lossless_sibling = not is_lossless(source_path) and _has_lossless_source(
-        source_path, config
-    )
+    lossless_sibling = _yields_to_twin(source_path, config)
 
     for output in config.outputs:
         filename, _action = plan_output(source_path, output)
@@ -837,9 +951,10 @@ def initial_sync(config: Config, periodic: bool = False) -> None:
     except Exception:
         logger.exception("Failed to scan source")
         return
-    if config.ignored_files:
+    if config.filters_sources:
         logger.info(
-            "ignored_files: %d folders not read, %d more audio files skipped",
+            "%s: %d folders not read, %d more audio files skipped",
+            _filter_names(config, "and").removeprefix("settings."),
             ignored["folders"],
             ignored["files"],
         )
@@ -885,7 +1000,7 @@ def _age_seconds(path: str, now: float) -> float:
 
 def _sidecar_source_ignored(full: str, output: OutputConfig, config: Config) -> bool:
     """True if the source sidecar that *full* in *output* copies is ignored."""
-    if not config.ignored_files:
+    if not config.filters_sources:
         return False
     rel = os.path.relpath(full, output.path)
     return is_ignored_file(os.path.join(config.source_path, rel), config)
@@ -916,13 +1031,13 @@ def _cleanup_orphans(config: Config) -> None:
 
     now = time.time()
     source_stems: set[str] = set()
-    lossless_stems: set[str] = set()
+    ranks = {f: _source_rank(f) for f in source_files}
+    best_rank: dict[str, int] = {}
     young_stems: set[str] = set()
     for f in source_files:
         stem = get_rel_stem(f, src_root)
         source_stems.add(stem)
-        if is_lossless(f):
-            lossless_stems.add(stem)
+        best_rank[stem] = max(best_rank.get(stem, 0), ranks[f])
         try:
             if _age_seconds(f, now) < ORPHAN_MIN_AGE:
                 young_stems.add(stem)
@@ -950,7 +1065,7 @@ def _cleanup_orphans(config: Config) -> None:
     for output in config.outputs:
         expected: set[str] = set()
         for f in source_files:
-            if not is_lossless(f) and get_rel_stem(f, src_root) in lossless_stems:
+            if ranks[f] < best_rank[get_rel_stem(f, src_root)]:
                 continue  # the lossless source of this stem wins
             filename, _action = plan_output(f, output)
             expected.add(get_output_file_path(f, src_root, output.path, filename))

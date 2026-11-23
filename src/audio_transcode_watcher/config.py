@@ -11,7 +11,7 @@ from typing import Any
 
 import yaml
 
-from .utils import ignore_entry_parts
+from .utils import SOURCE_FORMATS, ignore_entry_parts
 
 logger = logging.getLogger(__name__)
 
@@ -137,6 +137,8 @@ class Config:
 
     source_path: str
     outputs: list[OutputConfig] = field(default_factory=list)
+    # source.formats: the source formats to process (default: all of them)
+    source_formats: frozenset[str] = frozenset(SOURCE_FORMATS)
     force_reencode: bool = False
     allow_initial_bulk_encode: bool = True  # Allow encoding when outputs are empty
     parallel_workers: int = 4  # Number of parallel encoding workers
@@ -180,6 +182,8 @@ class Config:
                 "settings.ignored_files must be a list of paths inside the source folder"
             )
 
+        self.source_formats = _check_source_formats(self.source_formats)
+
         if not self.outputs:
             raise ValueError("At least one output is required")
 
@@ -192,6 +196,16 @@ class Config:
         paths = [o.path for o in self.outputs]
         if len(paths) != len(set(paths)):
             raise ValueError("Duplicate output paths detected")
+
+    @property
+    def formats_restricted(self) -> bool:
+        """True if source.formats leaves out at least one source format."""
+        return self.source_formats != frozenset(SOURCE_FORMATS)
+
+    @property
+    def filters_sources(self) -> bool:
+        """True if ignored_files or source.formats keeps any source out."""
+        return bool(self.ignored_files) or self.formats_restricted
 
     @property
     def output_paths(self) -> list[str]:
@@ -215,10 +229,15 @@ class Config:
         outputs = [OutputConfig.from_dict(o) for o in data.get("outputs", [])]
         settings = data.get("settings", {})
         _warn_deprecated_settings(settings)
+        source = data.get("source", {})
+        # Only a key that is present is checked, so "formats:" with no
+        # items (None) is refused instead of meaning "all".
+        formats = {"source_formats": source["formats"]} if "formats" in source else {}
 
         return cls(
-            source_path=data.get("source", {}).get("path", ""),
+            source_path=source.get("path", ""),
             outputs=outputs,
+            **formats,
             force_reencode=settings.get("force_reencode", False),
             allow_initial_bulk_encode=settings.get("allow_initial_bulk_encode", True),
             parallel_workers=settings.get("parallel_workers", 4),
@@ -245,6 +264,24 @@ class Config:
         """Load configuration from a JSON string."""
         data = json.loads(json_str)
         return cls.from_dict(data)
+
+
+def _check_source_formats(value: Any) -> frozenset[str]:
+    """Return source.formats as a set of names, or raise naming the valid ones."""
+    if isinstance(value, frozenset):
+        names = value
+    elif isinstance(value, list) and all(isinstance(v, str) for v in value):
+        names = frozenset(v.strip().lower() for v in value)
+    else:
+        names = None
+    if not names or not names <= SOURCE_FORMATS.keys():
+        unknown = sorted(names - SOURCE_FORMATS.keys()) if names else []
+        problem = f" Unknown: {', '.join(unknown)}." if unknown else ""
+        raise ValueError(
+            f"source.formats must be a non-empty list of format names.{problem}"
+            f" Valid: {', '.join(SOURCE_FORMATS)}"
+        )
+    return names
 
 
 def _valid_ignore_entry(entry: str) -> bool:
