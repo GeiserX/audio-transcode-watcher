@@ -21,6 +21,7 @@ from audio_transcode_watcher.sync import (
     process_source_file,
     purge_all_outputs,
     safety_guard_active,
+    is_ignored_file,
     sync_sidecars,
 )
 
@@ -121,6 +122,91 @@ class TestSafetyGuard:
         # Source has only hidden file, should be considered empty
         assert safety_guard_active(config) is True
 
+class TestIsIgnoredFile:
+    """Tests for is_ignored_file function."""
+
+    def test_when_ignored_files_empty(self, temp_dir):
+        """File is not ignored when config is empty."""
+        source = Path(temp_dir) / "source"
+        source.mkdir()
+        (source / "file.flac").touch()
+
+        output = Path(temp_dir) / "output"
+
+        config = Config(
+            source_path=str(source),
+            outputs=[OutputConfig(name="out", codec="alac", path=str(output))],
+        )
+
+        assert is_ignored_file(str(source / "file.flac"), config) is False
+
+    def test_neighbours_of_ignored_file(self, temp_dir):
+        """Neighbours of nested selector are not ignored"""
+        source = Path(temp_dir) / "source"
+        source.mkdir()
+
+        for rel in [
+            "test/folder/ignore/file.flac",
+            "test/folder/keep.flac"
+        ]:
+            path = source / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.touch()
+
+        output = Path(temp_dir) / "output"
+
+        config = Config(
+            source_path=str(source),
+            outputs=[OutputConfig(name="out", codec="alac", path=str(output))],
+            ignored_files=["test/folder/ignore"]
+        )
+
+        assert is_ignored_file(str(source / "test" / "folder" / "ignore" / "file.flac"), config) is True
+        assert is_ignored_file(str(source / "test" / "folder" / "keep.flac"), config) is False
+
+    def test_when_ignored_files_nested(self, temp_dir):
+        """Files are ignored even if they are nested."""
+        source = Path(temp_dir) / "source"
+        source.mkdir()
+
+        for rel in [
+            "ignore/file.flac", # To ignore
+            "ignore/test/file.flac" # To ignore
+            "keep/ignore/file.flac", # To keep
+            "ignore-not-really/file.flac", # To keep
+        ]:
+            path = source / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.touch()
+
+        output = Path(temp_dir) / "output"
+
+        config = Config(
+            source_path=str(source),
+            outputs=[OutputConfig(name="out", codec="alac", path=str(output))],
+            ignored_files=["ignore/"]
+        )
+
+        assert is_ignored_file(str(source / "ignore" / "file.flac"), config) is True
+        assert is_ignored_file(str(source / "ignore" / "test" / "file.flac"), config) is True
+        assert is_ignored_file(str(source / "keep" / "ignore" / "file.flac"), config) is False
+        assert is_ignored_file(str(source / "ignore-not-really" / "file.flac"), config) is False
+
+    def test_when_ignored_files_found(self, temp_dir):
+        """Files are ignored if they are matched at the top level."""
+        source = Path(temp_dir) / "source"
+        source.mkdir()
+        (source / "file.flac").touch()
+
+        output = Path(temp_dir) / "output"
+
+        config = Config(
+            source_path=str(source),
+            outputs=[OutputConfig(name="out", codec="alac", path=str(output))],
+            ignored_files=["file"]
+        )
+
+        assert is_ignored_file(str(source / "file.flac"), config) is True
 
 class TestProcessSourceFile:
     """Tests for process_source_file function."""
