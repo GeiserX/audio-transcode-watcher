@@ -61,6 +61,10 @@ settings:
   # Auto-fetch synced .lrc lyrics (default: true)
   fetch_lyrics: true
 
+  # Specify paths to skip sync for (default: empty)
+  ignored_files:
+    - ".deleted/"
+
   # Seconds between periodic full syncs (default: 300)
   sync_interval_seconds: 300
 
@@ -79,10 +83,10 @@ A source that fails the strict decode (see [Corrupt sources](how-it-works.md#cor
 Set it under `settings` for every output, or on one output to override, for example only on the AAC output that a phone plays from:
 
 ```yaml
-  - name: aac-256
-    codec: aac
-    path: /music/aac
-    corrupt_source: encode_anyway
+- name: aac-256
+  codec: aac
+  path: /music/aac
+  corrupt_source: encode_anyway
 ```
 
 Either way the source is remembered as failed, so the strict attempt is not repeated on every scan. Replacing the file with a clean copy (a new size or modification time) clears that, and the next scan rebuilds the tolerant copy with the strict encode.
@@ -116,10 +120,10 @@ Writing the tags changes the source file's size and modification time. The watch
 
 ## Source formats
 
-| Kind     | Extensions                                                         |
-|----------|--------------------------------------------------------------------|
-| Lossless | `.flac` `.alac` `.wav` `.aiff` `.aif` `.ape` `.wv` `.tta` `.tak`   |
-| Lossy    | `.mp3` `.aac` `.m4a` `.ogg` `.opus` `.wma`                         |
+| Kind     | Extensions                                                       |
+| -------- | ---------------------------------------------------------------- |
+| Lossless | `.flac` `.alac` `.wav` `.aiff` `.aif` `.ape` `.wv` `.tta` `.tak` |
+| Lossy    | `.mp3` `.aac` `.m4a` `.ogg` `.opus` `.wma`                       |
 
 A lossless source is encoded to every output.
 
@@ -132,12 +136,12 @@ When a lossless and a lossy file share a name in the source folder, the lossless
 Each output can cap the channel count and the sample rate:
 
 ```yaml
-  - name: aac-256
-    codec: aac
-    bitrate: 256k
-    path: /music/aac
-    channels: 2              # downmix anything with more channels to stereo
-    max_sample_rate: 48000   # resample anything above 48 kHz
+- name: aac-256
+  codec: aac
+  bitrate: 256k
+  path: /music/aac
+  channels: 2 # downmix anything with more channels to stereo
+  max_sample_rate: 48000 # resample anything above 48 kHz
 ```
 
 `aac` outputs get `channels: 2` and `max_sample_rate: 48000` when they don't set them, because they are for phones, AirPods and CarPlay. Every other codec has no limit unless you set one, and `0` turns a limit off (also for `aac`).
@@ -154,21 +158,21 @@ docker exec audio_transcoder find /music/aac -name '*.m4a' -exec sh -c 'ffprobe 
 
 FFmpeg writes the standard MP4 atoms (title, artist, album and so on). After an ALAC or AAC encode, the tags FFmpeg drops are copied from the source under the names MusicBrainz Picard uses, so Picard, TagLib (Navidrome, Jellyfin), foobar2000 and iTunes all read them:
 
-| Source tag                                   | MP4 atom                                              |
-|----------------------------------------------|-------------------------------------------------------|
+| Source tag                                                           | MP4 atom                                                           |
+| -------------------------------------------------------------------- | ------------------------------------------------------------------ |
 | `REPLAYGAIN_TRACK_GAIN`, `_TRACK_PEAK`, `_ALBUM_GAIN`, `_ALBUM_PEAK` | `----:com.apple.iTunes:replaygain_track_gain` and so on, lowercase |
-| `MUSICBRAINZ_TRACKID`                        | `----:com.apple.iTunes:MusicBrainz Track Id`          |
-| `MUSICBRAINZ_ALBUMID`                        | `----:com.apple.iTunes:MusicBrainz Album Id`          |
-| `MUSICBRAINZ_ARTISTID`                       | `----:com.apple.iTunes:MusicBrainz Artist Id`         |
-| `MUSICBRAINZ_ALBUMARTISTID`                  | `----:com.apple.iTunes:MusicBrainz Album Artist Id`   |
-| `MUSICBRAINZ_RELEASEGROUPID`                 | `----:com.apple.iTunes:MusicBrainz Release Group Id`  |
-| `ISRC`, `LABEL`, `CATALOGNUMBER`             | `----:com.apple.iTunes:ISRC`, `LABEL`, `CATALOGNUMBER` |
-| `ARTISTSORT`, `ALBUMARTISTSORT`, `ALBUMSORT` | the standard sort atoms `soar`, `soaa`, `soal`        |
+| `MUSICBRAINZ_TRACKID`                                                | `----:com.apple.iTunes:MusicBrainz Track Id`                       |
+| `MUSICBRAINZ_ALBUMID`                                                | `----:com.apple.iTunes:MusicBrainz Album Id`                       |
+| `MUSICBRAINZ_ARTISTID`                                               | `----:com.apple.iTunes:MusicBrainz Artist Id`                      |
+| `MUSICBRAINZ_ALBUMARTISTID`                                          | `----:com.apple.iTunes:MusicBrainz Album Artist Id`                |
+| `MUSICBRAINZ_RELEASEGROUPID`                                         | `----:com.apple.iTunes:MusicBrainz Release Group Id`               |
+| `ISRC`, `LABEL`, `CATALOGNUMBER`                                     | `----:com.apple.iTunes:ISRC`, `LABEL`, `CATALOGNUMBER`             |
+| `ARTISTSORT`, `ALBUMARTISTSORT`, `ALBUMSORT`                         | the standard sort atoms `soar`, `soaa`, `soal`                     |
 
 ## Supported Codecs
 
 | Codec  | Extension | Bitrate   | Artwork | Description                |
-|--------|-----------|-----------|---------|----------------------------|
+| ------ | --------- | --------- | ------- | -------------------------- |
 | `alac` | `.m4a`    | N/A       | Yes     | Lossless, Apple compatible |
 | `aac`  | `.m4a`    | 64k--320k | Yes     | Lossy, excellent quality   |
 | `mp3`  | `.mp3`    | 64k--320k | Yes     | Lossy, universal support   |
@@ -184,4 +188,3 @@ You can alternatively provide configuration as a JSON string via the `CONFIG_JSO
 environment:
   - CONFIG_JSON={"source":{"path":"/music/flac"},"outputs":[{"name":"mp3","codec":"mp3","bitrate":"256k","path":"/music/mp3"}]}
 ```
-
