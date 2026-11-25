@@ -105,7 +105,7 @@ settings:
 
 By default, `ignored_files` acts on the source only. The orphan cleanup still removes audio and `.lrc` files in an output that no source accounts for, and it removes empty folders there. Set `ignored_files_in_outputs: true` to leave the same paths alone in every output folder too. The default is `false`.
 
-One use is a second Syncthing connection that syncs an output folder. That connection keeps its own `.stfolder`, `.stignore` and `.stversions` in the output, and Syncthing stops the folder when its `.stfolder` is missing.
+One use is a second Syncthing connection that syncs an output folder. That connection keeps its own `.stfolder`, `.stignore` and `.stversions` in the output, and Syncthing stops the folder when its `.stfolder` is missing. While it downloads a file, Syncthing also writes a temp file named `.syncthing.<name>.tmp` next to it, in any folder. Give those temp files their own `**/.syncthing.*` entry.
 
 ```yaml
 settings:
@@ -113,6 +113,7 @@ settings:
     - ".stfolder"     # each side's own Syncthing marker
     - ".stignore"
     - ".stversions"   # each side's own versions folder; use "**/.stversions" if they appear deeper
+    - "**/.syncthing.*"   # Syncthing's temp files while it downloads
   ignored_files_in_outputs: true
 ```
 

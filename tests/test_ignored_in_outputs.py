@@ -257,6 +257,16 @@ class TestIssue55:
             ".stversions/a.m4a",
         ]
 
+    def test_documented_example_keeps_syncthing_temp_files(self, temp_dir):
+        """The docs example lists **/.syncthing.* for Syncthing's download temps."""
+        entries = [*SYNCTHING, "**/.syncthing.*"]
+        source, out, config = _keep_config(temp_dir, entries, force_reencode=True)
+        _touch(source, "Album/Song.flac")
+        temps = ["Album/.syncthing.Song.lrc.tmp", "Album/.syncthing.Song.m4a.tmp"]
+        _touch(out, "Album/Song.m4a", *temps)
+        purge_all_outputs(config)
+        assert _files(out) == temps
+
     def test_stale_temps_in_protected_folders_are_kept(self, temp_dir):
         _source, out, config = _keep_config(temp_dir, [".stversions"])
         _touch(out, ".stversions/x.m4a.tmp__ff", "Album/x.m4a.tmp__ff")
