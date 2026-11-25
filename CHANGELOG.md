@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- `settings.ignored_files_in_outputs` (default `false`) also leaves the `ignored_files` paths alone in every output folder. A sync tool can then keep its own files there, such as a second Syncthing connection's `.stfolder`, `.stignore` and `.stversions`, and no sync, folder delete or `force_reencode` removes or empties them. Each entry is relative to each output's folder. A matching folder protects everything in it. Audio and `.lrc` files are protected only through a matching folder, so an entry like `**/*.wav` never freezes a WAV output's own files. With the key unset, nothing changes. See [Ignored paths](docs/configuration.md#ignored-paths) (#55).
+
 ## [0.8.0] - 2026-11-23
 
 ### Added

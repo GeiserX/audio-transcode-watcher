@@ -67,6 +67,7 @@ settings:
   # (default: none). See below.
   ignored_files:
     - "**/.stversions"
+  # ignored_files_in_outputs: false   # see below
 
   # Seconds between periodic full syncs (default: 300)
   sync_interval_seconds: 300
@@ -95,10 +96,34 @@ settings:
 - `**` matches any number of folders, or none. An entry that starts with `**/` matches at any depth. Any other entry starts at the top of the source, so `.stversions` does not match `Artist/.stversions/`.
 - A sync does not read ignored folders at all. A file moved into an ignored folder counts as deleted, and a file moved out of one counts as new.
 - An ignored lossless file no longer wins over a lossy file with the same name. With `**/*.flac`, `Song.mp3` next to `Song.flac` gets its own outputs. An output that `Song.flac` made under the shared name, such as `Song.m4a` in an AAC output, is made again from `Song.mp3`. Remove the entry, and `Song.flac` wins again.
-- Outputs are derived data. The next full sync removes outputs and `.lrc` copies whose only source is ignored, like any other orphan. This also cleans up files that got into the outputs before you added the entry. Remove the entry, and the next sync makes them again.
+- Outputs are derived data. The next full sync removes outputs and `.lrc` copies whose only source is ignored, like any other orphan. This also cleans up files that got into the outputs before you added the entry. Remove the entry, and the next sync makes them again. Files inside an output folder that `ignored_files_in_outputs` protects stay (see below).
 - If no audio file in the source is left after the entries apply, the source counts as empty. The safety guard stops the sync, logs a WARNING that names `ignored_files`, and removes nothing.
 - Each full sync logs one INFO line with the number of ignored folders it did not read and the number of other ignored audio files it skipped.
 - The value must be a list. A plain string, an empty entry, `/`, `**` or an entry with a `..` part stops the watcher at startup with an error.
+
+#### Leave them alone in the outputs too
+
+By default, `ignored_files` acts on the source only. The orphan cleanup still removes audio and `.lrc` files in an output that no source accounts for, and it removes empty folders there. Set `ignored_files_in_outputs: true` to leave the same paths alone in every output folder too. The default is `false`.
+
+One use is a second Syncthing connection that syncs an output folder. That connection keeps its own `.stfolder`, `.stignore` and `.stversions` in the output, and Syncthing stops the folder when its `.stfolder` is missing.
+
+```yaml
+settings:
+  ignored_files:
+    - ".stfolder"     # each side's own Syncthing marker
+    - ".stignore"
+    - ".stversions"   # each side's own versions folder; use "**/.stversions" if they appear deeper
+  ignored_files_in_outputs: true
+```
+
+- Each entry is also a path relative to each output's folder, with the same rules as on the source side. `.stversions` means that folder at the top of the output, and `**/.stversions` means a folder with that name at any depth.
+- A matching folder protects everything in it, audio files included. A protected folder stays even when it is empty.
+- An entry that names a file protects only a file that the watcher does not write itself. Audio, `.lrc`, `.tmp__ff` and `.atw-manifest.json` files are protected only by a matching folder. So `.stignore` protects the output's `.stignore`, and `**/*.wav` never freezes the files of a WAV output.
+- The orphan cleanup, the empty-folder cleanup, the cleanup after a source folder is deleted or moved away, `force_reencode` and the stale temp cleanup all leave protected paths alone.
+- Files that the watcher made earlier inside a protected folder stay. Delete the ones you do not want by hand. Files that an earlier sync already removed do not come back.
+- Outputs of ignored sources outside a protected folder are still removed as orphans, for example `Live.m4a` made from an ignored `Live.wav`.
+- If you turn the key off again, the next full sync removes the audio and `.lrc` files under those paths that no source accounts for. That includes the sync tool's own versions.
+- The key changes nothing on the source side. The safety guard and `source.formats` work as before.
 
 ### Damaged sources
 

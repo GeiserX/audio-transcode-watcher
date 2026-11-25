@@ -78,6 +78,13 @@ settings:
   #   - "**/.stversions"
   #   - "**/*.wav"
 
+  # true: also leave the ignored_files paths alone in every output folder.
+  # A matching output folder and everything in it is never removed, emptied
+  # or purged, for example a sync tool's own .stfolder and .stversions there.
+  # Audio and .lrc files are protected only by a matching folder, never by
+  # their own name. Default: false.
+  # ignored_files_in_outputs: false
+
   # Seconds between periodic full syncs (default: 300)
   sync_interval_seconds: 300
 
