@@ -419,6 +419,43 @@ class TestStartWatcher:
         observer.join(timeout=5)
 
 
+class TestDirectoryDeleteKeepsIgnoredInOutputs:
+    """A source folder delete leaves protected output paths alone."""
+
+    def _run(self, tmp_path, keep):
+        src = tmp_path / "source"
+        (src / "Other").mkdir(parents=True)
+        (src / "Other" / "b.flac").write_text("x")
+        out = tmp_path / "output"
+        (out / "Artist" / ".stversions").mkdir(parents=True)
+        for rel in (
+            "Artist/a.m4a",
+            "Artist/.stversions/old.m4a",
+            "Artist/.nomedia",
+            "Artist/.syncthing.a.m4a.tmp",
+        ):
+            (out / rel).write_text("data")
+        config = Config(
+            source_path=str(src),
+            outputs=[OutputConfig(name="aac", codec="aac", path=str(out))],
+            ignored_files=["**/.stversions", "**/.nomedia", "**/.syncthing.*"],
+        )
+        config.ignored_files_in_outputs = keep
+        AudioSyncHandler(config)._handle_directory_delete(str(src / "Artist"))
+        return out
+
+    def test_protected_paths_survive(self, tmp_path):
+        out = self._run(tmp_path, keep=True)
+        assert not (out / "Artist" / "a.m4a").exists()
+        assert (out / "Artist" / ".stversions" / "old.m4a").is_file()
+        assert (out / "Artist" / ".nomedia").is_file()
+        assert (out / "Artist" / ".syncthing.a.m4a.tmp").is_file()
+
+    def test_without_the_key_everything_goes(self, tmp_path):
+        out = self._run(tmp_path, keep=False)
+        assert not (out / "Artist").exists()
+
+
 class TestIgnoredEvents:
     """Events under ignored paths do nothing; moves across the line count."""
 

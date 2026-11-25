@@ -15,6 +15,8 @@ from .sync import (
     delete_outputs,
     delete_sidecars,
     is_ignored_file,
+    kept_in_output,
+    output_keeper,
     process_source_file,
     safety_guard_active,
     sync_sidecars,
@@ -120,13 +122,23 @@ class AudioSyncHandler(FileSystemEventHandler):
         for output in self.config.outputs:
             mirrored = os.path.join(output.path, rel_dir)
             if os.path.isdir(mirrored):
-                for dirpath, _dirnames, filenames in os.walk(mirrored, topdown=False):
+                keep = output_keeper(output.path, self.config)
+                for dirpath, dirnames, filenames in os.walk(mirrored):
+                    if keep is not None:
+                        dirnames[:] = [
+                            d for d in dirnames if not keep(os.path.join(dirpath, d))
+                        ]
                     for fname in filenames:
+                        full = os.path.join(dirpath, fname)
+                        if keep is not None and kept_in_output(
+                            full, output.path, self.config
+                        ):
+                            continue
                         try:
-                            os.remove(os.path.join(dirpath, fname))
+                            os.remove(full)
                         except OSError:
                             pass
-                remove_empty_dirs(output.path)
+                remove_empty_dirs(output.path, keep)
 
     def _reprocess_directory(self, directory: str) -> None:
         """Re-process all audio files in a directory in a background thread."""

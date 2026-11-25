@@ -145,6 +145,8 @@ class Config:
     stability_timeout: float = 60.0
     min_stable_seconds: float = 1.0
     ignored_files: list[str] = field(default_factory=list)
+    # Also leave the ignored_files paths alone in every output folder
+    ignored_files_in_outputs: bool = False
     fetch_lyrics: bool = True  # Auto-fetch .lrc lyrics via syncedlyrics
     sync_interval_seconds: int = 300  # Seconds between periodic full syncs
     corrupt_source: str = "skip"  # Default for outputs that don't set it
@@ -181,6 +183,8 @@ class Config:
             raise ValueError(
                 "settings.ignored_files must be a list of paths inside the source folder"
             )
+        if not isinstance(self.ignored_files_in_outputs, bool):
+            raise ValueError("settings.ignored_files_in_outputs must be true or false")  # noqa: TRY004
 
         self.source_formats = _check_source_formats(self.source_formats)
 
@@ -244,6 +248,7 @@ class Config:
             stability_timeout=settings.get("stability_timeout", 60.0),
             min_stable_seconds=settings.get("min_stable_seconds", 1.0),
             ignored_files=settings.get("ignored_files", []),
+            ignored_files_in_outputs=settings.get("ignored_files_in_outputs", False),
             fetch_lyrics=settings.get("fetch_lyrics", True),
             sync_interval_seconds=settings.get("sync_interval_seconds", 300),
             corrupt_source=settings.get("corrupt_source", "skip"),

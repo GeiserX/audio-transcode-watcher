@@ -369,6 +369,20 @@ class TestRemoveEmptyDirs:
             # Should not raise
             remove_empty_dirs(temp_dir)
 
+    def test_keep_leaves_kept_folders(self, temp_dir):
+        """A kept folder stays even when empty, and so do folders around it."""
+        root = Path(temp_dir)
+        (root / "parent" / "kept" / "inner").mkdir(parents=True)
+        (root / "parent" / "gone").mkdir()
+
+        def keep(path):
+            rel = Path(path).relative_to(root).parts
+            return rel[:2] == ("parent", "kept")
+
+        remove_empty_dirs(temp_dir, keep)
+        assert (root / "parent" / "kept" / "inner").is_dir()
+        assert not (root / "parent" / "gone").exists()
+
 
 class TestWaitForStable:
     """Tests for wait_for_stable function."""

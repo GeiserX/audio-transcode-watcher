@@ -8,6 +8,7 @@ import os
 import shutil
 import threading
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -34,6 +35,7 @@ from .utils import (
     get_output_filename,
     get_rel_stem,
     has_audio_extension,
+    has_sidecar_extension,
     has_unignored_audio,
     is_audio_file,
     is_lossless,
@@ -198,6 +200,41 @@ def is_ignored_file(file_path: str, config: Config) -> bool:
         logger.debug("Skipping %s (its format is not in source.formats)", file_path)
         return True
     return False
+
+
+def kept_in_output(
+    path: str, output_root: str, config: Config, *, folder: bool = False
+) -> bool:
+    """True if *path* in the output folder *output_root* must be left alone.
+
+    With settings.ignored_files_in_outputs, the ignored_files entries also
+    match paths relative to each output folder, by the same rules as on the
+    source side. A file the watcher writes itself (audio, .lrc, .tmp__ff,
+    the manifest) is protected only by a matching folder, never by its own
+    name, so an entry such as ``**/*.wav`` never freezes a WAV output.
+    Pass ``folder=True`` for a folder.
+    """
+    if not config.ignored_files_in_outputs or not config.ignored_files:
+        return False
+    rel = os.path.relpath(nfc_path(path), nfc_path(output_root))
+    name = os.path.basename(rel)
+    if not folder and (
+        has_audio_extension(name)
+        or has_sidecar_extension(name)
+        or name.endswith(".tmp__ff")
+        or name.startswith(manifest.MANIFEST_NAME)
+    ):
+        rel = os.path.dirname(rel)
+        if rel == "":
+            return False
+    return matches_ignored(rel, config.ignored_files)
+
+
+def output_keeper(output_root: str, config: Config) -> Callable[[str], bool] | None:
+    """A test for folders kept_in_output protects, or None if none can be."""
+    if not config.ignored_files_in_outputs or not config.ignored_files:
+        return None
+    return lambda p: kept_in_output(p, output_root, config, folder=True)
 
 
 def _unwanted_format(path: str, config: Config) -> bool:
@@ -783,7 +820,7 @@ def delete_outputs(source_path: str, config: Config) -> None:
 
     # Clean up empty subdirectories left after deletions
     for output in config.outputs:
-        remove_empty_dirs(output.path)
+        remove_empty_dirs(output.path, output_keeper(output.path, config))
 
 
 def sync_sidecars(source_path: str, config: Config) -> None:
@@ -868,7 +905,12 @@ def cleanup_stale_temp_files(config: Config) -> int:
         try:
             if not os.path.exists(output.path):
                 continue
-            for dirpath, _dirnames, filenames in os.walk(output.path):
+            keep = output_keeper(output.path, config)
+            for dirpath, dirnames, filenames in os.walk(output.path):
+                if keep is not None:
+                    dirnames[:] = [
+                        d for d in dirnames if not keep(os.path.join(dirpath, d))
+                    ]
                 for fname in filenames:
                     if fname.endswith(".tmp__ff"):
                         full = os.path.join(dirpath, fname)
@@ -899,16 +941,24 @@ def purge_all_outputs(config: Config) -> None:
     for output in config.outputs:
         try:
             os.makedirs(output.path, exist_ok=True)
-            for dirpath, _dirnames, filenames in os.walk(output.path):
+            keep = output_keeper(output.path, config)
+            for dirpath, dirnames, filenames in os.walk(output.path):
+                if keep is not None:
+                    dirnames[:] = [
+                        d for d in dirnames if not keep(os.path.join(dirpath, d))
+                    ]
                 for fname in filenames:
                     full = os.path.join(dirpath, fname)
+                    if keep is not None and kept_in_output(full, output.path, config):
+                        logger.debug("Leaving protected %s alone", full)
+                        continue
                     try:
                         logger.info("✘ purge %s", full)
                         os.remove(full)
                     except OSError as e:
                         logger.error("Failed to purge %s: %s", full, e)
             manifest.forget(output.path)
-            remove_empty_dirs(output.path)
+            remove_empty_dirs(output.path, keep)
         except Exception:
             logger.exception("Failed to purge folder %s", output.path)
 
@@ -1070,8 +1120,14 @@ def _cleanup_orphans(config: Config) -> None:
             filename, _action = plan_output(f, output)
             expected.add(get_output_file_path(f, src_root, output.path, filename))
 
+        keep = output_keeper(output.path, config)
         try:
-            for dirpath, _dirnames, filenames in os.walk(output.path):
+            for dirpath, dirnames, filenames in os.walk(output.path):
+                # Audio and .lrc files are protected only by their folder.
+                if keep is not None:
+                    dirnames[:] = [
+                        d for d in dirnames if not keep(os.path.join(dirpath, d))
+                    ]
                 for fname in filenames:
                     full = os.path.join(dirpath, fname)
                     if has_audio_extension(full):
@@ -1099,6 +1155,6 @@ def _cleanup_orphans(config: Config) -> None:
     # Remove empty subdirectories left after orphan cleanup, and forget
     # manifest rows whose output is gone
     for output in config.outputs:
-        remove_empty_dirs(output.path)
+        remove_empty_dirs(output.path, output_keeper(output.path, config))
         manifest.prune(output.path)
         manifest.flush(output.path, force=True)

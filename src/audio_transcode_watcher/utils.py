@@ -417,10 +417,13 @@ def has_unignored_audio(directory: str, ignored: Callable[[str], bool]) -> bool:
     return False
 
 
-def remove_empty_dirs(root: str) -> None:
-    """Remove empty subdirectories bottom-up (never removes *root* itself)."""
+def remove_empty_dirs(root: str, keep: Callable[[str], bool] | None = None) -> None:
+    """Remove empty subdirectories bottom-up (never removes *root* itself).
+
+    With *keep*, a folder for which it returns True is never removed.
+    """
     for dirpath, _dirnames, _filenames in os.walk(root, topdown=False):
-        if dirpath == root:
+        if dirpath == root or (keep is not None and keep(dirpath)):
             continue
         try:
             if not os.listdir(dirpath):

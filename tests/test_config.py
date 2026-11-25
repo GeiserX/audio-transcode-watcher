@@ -432,3 +432,31 @@ class TestCorruptSourceSetting:
             OutputConfig.from_dict(
                 {"name": "aac", "codec": "aac", "path": "/a", "corrupt_source": "yes"}
             )
+
+
+class TestIgnoredFilesInOutputs:
+    """settings.ignored_files_in_outputs."""
+
+    def test_defaults_to_false(self):
+        assert Config.from_dict(_settings_config({})).ignored_files_in_outputs is False
+
+    @pytest.mark.parametrize("value", [True, False])
+    def test_loads_true_and_false(self, value):
+        cfg = Config.from_dict(
+            _settings_config(
+                {"ignored_files": [".stfolder"], "ignored_files_in_outputs": value}
+            )
+        )
+        assert cfg.ignored_files_in_outputs is value
+
+    @pytest.mark.parametrize("value", ["yes", 1, None])
+    def test_rejects_non_bool(self, value):
+        with pytest.raises(
+            ValueError, match="settings.ignored_files_in_outputs must be true or false"
+        ):
+            Config.from_dict(_settings_config({"ignored_files_in_outputs": value}))
+
+    def test_true_without_ignored_files_loads(self):
+        cfg = Config.from_dict(_settings_config({"ignored_files_in_outputs": True}))
+        assert cfg.ignored_files_in_outputs is True
+        assert cfg.ignored_files == []
