@@ -2,11 +2,11 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.9.0] - 2026-11-25
 
 ### Added
 
-- `settings.ignored_files_in_outputs` (default `false`) also leaves the `ignored_files` paths alone in every output folder. A sync tool can then keep its own files there, such as a second Syncthing connection's `.stfolder`, `.stignore` and `.stversions`, and no sync, folder delete or `force_reencode` removes or empties them. Each entry is relative to each output's folder. A matching folder protects everything in it. Audio and `.lrc` files are protected only through a matching folder, so an entry like `**/*.wav` never freezes a WAV output's own files. With the key unset, nothing changes. See [Ignored paths](docs/configuration.md#ignored-paths) (#55).
+- `settings.ignored_files_in_outputs` (default `false`) also leaves the `ignored_files` paths alone in every output folder. A sync tool can then keep its own files there, such as a second Syncthing connection's `.stfolder`, `.stignore` and `.stversions`, and no sync, folder delete or `force_reencode` removes or empties them. Each entry is relative to each output's folder. A matching folder protects everything in it. Audio and `.lrc` files are protected only through a matching folder, so an entry like `**/*.wav` never freezes a WAV output's own files. With the key unset, nothing changes. See [Ignored paths](docs/configuration.md#ignored-paths). Thanks to @delete-44 for the report (#55).
 
 ## [0.8.0] - 2026-11-23
 
@@ -104,6 +104,7 @@ All notable changes to this project are documented here. The format follows [Kee
 - Lossy copies are written through a temp file and renamed, like encodes, so a half-written copy is never visible.
 - `force_reencode: true` purges the outputs once at startup. It used to purge them again on every periodic sync, which re-encoded the whole library every five minutes.
 
+[0.9.0]: https://github.com/GeiserX/audio-transcode-watcher/releases/tag/v0.9.0
 [0.8.0]: https://github.com/GeiserX/audio-transcode-watcher/releases/tag/v0.8.0
 [0.7.2]: https://github.com/GeiserX/audio-transcode-watcher/releases/tag/v0.7.2
 [0.7.1]: https://github.com/GeiserX/audio-transcode-watcher/releases/tag/v0.7.1
